@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include <ctype.h>
+#include <errno.h>
+#include <unistd.h>
 #include <math.h>
 #include <malloc.h>
 #include <stdbool.h>
@@ -105,6 +107,12 @@ static void sim_ensure_dir(const char *path)
 
 static void sim_ensure_runtime_dirs(void)
 {
+    sim_ensure_dir("/system/fonts");
+    /* Match the firmware default font path without duplicating the bundled TTF. */
+    if (access("/system/fonts/NotoSansSC-Regular-sub.ttf", F_OK) != 0 &&
+            symlink("/fonts/NotoSansSC-Regular.ttf", "/system/fonts/NotoSansSC-Regular-sub.ttf") != 0) {
+        fprintf(stderr, "[sim] default font alias failed: %s\n", strerror(errno));
+    }
     sim_ensure_dir("/app");
     sim_ensure_dir("/storage");
     sim_ensure_dir("/tmp");
@@ -852,6 +860,14 @@ static int lua_system_millis(lua_State *L)
     return 1;
 }
 
+static int lua_system_time(lua_State *L)
+{
+    time_t now = time(NULL);
+    if (now == (time_t)-1) return luaL_error(L, "system time unavailable");
+    lua_pushinteger(L, (lua_Integer)now);
+    return 1;
+}
+
 static int lua_system_date(lua_State *L)
 {
     const char *fmt = luaL_optstring(L, 1, "%c");
@@ -870,6 +886,7 @@ static int luaopen_system(lua_State *L)
 {
     static const luaL_Reg funcs[] = {
         {"millis", lua_system_millis},
+        {"time", lua_system_time},
         {"date", lua_system_date},
         {NULL, NULL},
     };

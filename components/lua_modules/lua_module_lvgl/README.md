@@ -298,6 +298,13 @@ Common `align` names:
 `bottom`, `bottom_right`, `left_mid`, `left`, `right_mid`, `right`,
 `center`, `centre`, `default`
 
+## Object Flags And Order
+
+- `obj:add_flag(name)` / `obj:clear_flag(name)` -> true. Supported names: `CLICKABLE`, `PRESS_LOCK`, `SCROLLABLE`, `HIDDEN` (case-sensitive).
+- `obj:move_foreground()` -> true. Moves the object above its siblings; screens have no parent and raise an error.
+
+Use `PRESS_LOCK` on hold controls to keep receiving release events when a finger leaves the control. Clear `CLICKABLE` on decorative widgets so they do not intercept touches. `HIDDEN` disables drawing and hit testing without deleting the object. These methods raise errors for unsupported flags or invalid/deleted handles; they do not allocate widget resources.
+
 ## Layout And Scrolling
 
 Flex:
@@ -368,6 +375,11 @@ Basic methods:
 - `bar/slider/arc/scale/dropdown/roller/checkbox/switch/spinbox:get_value()`
 - `bar/slider/arc/scale/spinbox:set_range(min, max)`
 - `screen:load()`
+- `image:set_raw_rgb565(width, height, data[, opts])` -> true
+- `image:set_raw_argb8888(width, height, data)` -> true
+- `image:set_pivot(x, y)` -> true
+- `image:set_rotation(angle)` -> true
+- `line:set_points({{x=0,y=0}, {x=20,y=20}, ...})` -> true
 - `list:add_text(text)` -> `list_text`
 - `list:add_button(text[, symbol])` -> `list_button`
 - `table:set_cell(row, col, text)`
@@ -460,14 +472,35 @@ Basic methods:
 
 `lvgl.demo(name)` requires an initialized LVGL runtime. Available demo names depend on firmware LVGL demo build flags.
 
+## Raw Images And Dynamic Lines
+
+Raw image setters copy tightly packed pixel strings into object-owned buffers. RGB565 uses little-endian bytes by default; `{swapped=true}` accepts big-endian RGB565. ARGB8888 uses B, G, R, A byte order. The string length must equal `width * height * bytes_per_pixel`. Dimensions must be positive integers; height and the internally aligned row stride must fit in 16 bits. Buffers must also fit the platform allocation limits.
+
+Uploads replace the previous source. Argument, allocation, or unsupported-format errors leave the previous image intact. Replacement and object deletion release the old pixels and invalidate their LVGL cache entries. Lua strings and image frames may be released immediately after upload. Rotation updates do not copy pixels.
+
+`set_rotation(angle)` accepts an integer in tenths of a degree, clockwise, normalized modulo 3600. `set_pivot(x, y)` uses pixel coordinates. Pivot and line coordinates must be integers in `[-32768, 32767]`. Image rotation requires firmware draw support for its color format.
+
+JPEG decoding stays in `image`; no JPEG decoder dependency is added to `lvgl`:
+
+```lua
+local image = require("image")
+local source <close> = image.load_file(path)
+local cover <close> = image.resize(source, { width = 148, height = 148, format = image.RGB565 })
+local picture = lvgl.image(scr, { w = 148, h = 148 })
+picture:set_raw_rgb565(148, 148, cover:data())
+picture:set_pivot(74, 74)
+picture:set_rotation(450)
+```
+
+Line construction and `set_points()` accept 2–1024 point tables; omitted coordinates default to zero. Updates validate all points before changing the line and reuse its buffer when the point count is unchanged. These methods raise Lua errors for invalid arguments or deleted objects. Raw image buffers and line points are also released by parent deletion and `lvgl.deinit()`.
+
 ## Limitations
 
 - Encoder/keypad indevs are not exposed yet.
 - Some widgets and demos depend on LVGL `LV_USE_*` build flags; disabled entries raise a Lua error such as `not enabled in firmware`.
 - `lvgl.font_load(...)` requires LVGL `tiny_ttf` support.
 - Image decoders and general filesystem setup are not wrapped.
-- `lvgl.image(...)` and `lvgl.imagebutton(...)` only pass string `src` values
-  to LVGL. Whether those strings load depends on firmware FS/decoder setup.
+- Constructor `src` and `imagebutton:set_src(...)` pass string sources to LVGL; loading them depends on firmware FS/decoder setup. `image` raw setters bypass file decoding.
 - Canvas support covers buffer allocation, background fill, and pixel read/write only. Advanced draw layers are not wrapped.
 - Chart cursors and other advanced chart APIs are not wrapped.
 - Span handles and chart series handles are not LVGL objects; they do not support object base methods such as `set_pos`, `set_style`, or `delete`.

@@ -73,6 +73,8 @@ set(ESP_CLAW_SIM_SOURCES
     ${ESP_CLAW_ROOT}/components/common/esp_painter/font/basic_font_24.c
     ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_lvgl/src/lua_module_lvgl.c
     ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_lvgl/src/lua_lvgl_core_widgets.c
+    ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_lvgl/src/lua_lvgl_image.c
+    ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_lvgl/src/lua_lvgl_line.c
     ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_lvgl/src/lua_lvgl_complex_widgets.c
     ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_lvgl/src/lua_lvgl_demos.c
     ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_lvgl/src/lua_lvgl_eaf.c

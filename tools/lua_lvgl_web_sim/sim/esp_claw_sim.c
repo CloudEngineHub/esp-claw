@@ -5,6 +5,7 @@
  */
 #include <ctype.h>
 #include <math.h>
+#include <malloc.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -20,6 +21,8 @@
 #include <lualib.h>
 
 #include "lua_module_lvgl.h"
+#include "lua_display_sim.h"
+#include "display_service.h"
 
 extern esp_err_t lua_lvgl_deinit_runtime(void);
 extern void sim_esp_compat_pump_once(void);
@@ -1886,48 +1889,10 @@ static int luaopen_http_server(lua_State *L)
     return 1;
 }
 
-static int sim_lvgl_init(lua_State *L)
-{
-    int nargs = lua_gettop(L);
-    int height = (int)luaL_checkinteger(L, 4);
-    int min_buffer_lines = height;
-
-    if (nargs < 6 || lua_isnil(L, 6)) {
-        lua_settop(L, 5);
-        lua_newtable(L);
-        lua_pushinteger(L, min_buffer_lines);
-        lua_setfield(L, 6, "buffer_lines");
-        nargs = 6;
-    } else if (lua_istable(L, 6)) {
-        int buffer_lines;
-        lua_getfield(L, 6, "buffer_lines");
-        buffer_lines = lua_isnil(L, -1) ? 0 : (int)luaL_checkinteger(L, -1);
-        lua_pop(L, 1);
-        if (buffer_lines < min_buffer_lines) {
-            lua_pushinteger(L, min_buffer_lines);
-            lua_setfield(L, 6, "buffer_lines");
-        }
-    }
-
-    lua_pushvalue(L, lua_upvalueindex(1));
-    lua_insert(L, 1);
-    lua_call(L, nargs, LUA_MULTRET);
-    return lua_gettop(L);
-}
-
-static void sim_patch_lvgl_module(lua_State *L)
-{
-    lua_getfield(L, -1, "init");
-    if (lua_isfunction(L, -1)) {
-        lua_pushcclosure(L, sim_lvgl_init, 1);
-        lua_setfield(L, -2, "init");
-    } else {
-        lua_pop(L, 1);
-    }
-}
-
 static void sim_register_modules(lua_State *L)
 {
+    luaL_requiref(L, "display", luaopen_display, 1);
+    lua_pop(L, 1);
     luaL_requiref(L, "board_manager", luaopen_board_manager, 1);
     lua_pop(L, 1);
     luaL_requiref(L, "delay", luaopen_delay, 1);
@@ -1971,7 +1936,6 @@ static void sim_register_modules(lua_State *L)
     luaL_requiref(L, "system", luaopen_system, 1);
     lua_pop(L, 1);
     luaL_requiref(L, "lvgl", luaopen_lvgl, 1);
-    sim_patch_lvgl_module(L);
     lua_pop(L, 1);
 }
 
@@ -2013,10 +1977,14 @@ int esp_claw_sim_run_file(const char *path)
         return 1;
     }
     if (s_lua) {
+        lua_sethook(s_lua, NULL, 0, 0);
+        sim_display_cleanup(s_lua);
         (void)lua_lvgl_deinit_runtime();
         lua_close(s_lua);
+        s_lua = NULL;
     }
     s_lua = luaL_newstate();
+    if (!s_lua) { free(script); printf("Lua allocation failed\n"); return 1; }
     luaL_openlibs(s_lua);
     lua_sethook(s_lua, sim_lua_stop_hook, LUA_MASKCOUNT, 1000);
     sim_register_modules(s_lua);
@@ -2029,15 +1997,27 @@ int esp_claw_sim_run_file(const char *path)
     if (rc != LUA_OK) {
         printf("Lua error: %s\n", lua_tostring(s_lua, -1));
         lua_pop(s_lua, 1);
-        return 1;
     }
-    return 0;
+    lua_sethook(s_lua, NULL, 0, 0);
+    sim_display_cleanup(s_lua);
+    (void)lua_lvgl_deinit_runtime();
+    lua_close(s_lua);
+    s_lua = NULL;
+    display_service_stop();
+    return rc == LUA_OK ? 0 : 1;
 }
 
 EMSCRIPTEN_KEEPALIVE
 void esp_claw_sim_stop(void)
 {
     sim_set_stop_requested(true);
+}
+
+/* Expose live allocation size for lifecycle regression checks. */
+EMSCRIPTEN_KEEPALIVE
+size_t esp_claw_sim_heap_used(void)
+{
+    return mallinfo().uordblks;
 }
 
 int main(void)

@@ -1,4 +1,5 @@
 import type { LoadedApp } from './types'
+import { buildAppBootstrap } from './app-bootstrap'
 
 export type RuntimeState = 'ready' | 'running' | 'stopping' | 'exited' | 'error'
 
@@ -11,8 +12,9 @@ export interface RuntimeHostCallbacks {
 export class RuntimeHost {
   private iframe: HTMLIFrameElement
   private ready = false
+  private running = false
   private pendingApp: LoadedApp | null = null
-  private runtimeUrl = './runtime/esp_claw_sim.html?embedded=1&v=unified-ui-1'
+  private runtimeUrl = './runtime/esp_claw_sim.html?embedded=1&v=display-1'
   private callbacks: RuntimeHostCallbacks
 
   constructor(iframe: HTMLIFrameElement, callbacks: RuntimeHostCallbacks = {}) {
@@ -47,7 +49,9 @@ export class RuntimeHost {
       } else if (data?.type === 'esp-claw-sim:stopping') {
         this.callbacks.onState?.('stopping')
       } else if (data?.type === 'esp-claw-sim:exited') {
+        this.running = false
         this.callbacks.onState?.('exited', { code: data.code, stopped: data.stopped })
+        if (this.pendingApp) this.run(this.pendingApp)
       } else if (
         data?.type === 'esp-claw-sim:resolutionChanged' &&
         typeof data.width === 'number' &&
@@ -55,6 +59,8 @@ export class RuntimeHost {
       ) {
         this.callbacks.onResolution?.(data.width, data.height)
       } else if (data?.type === 'esp-claw-sim:error') {
+        this.running = false
+        this.pendingApp = null
         this.callbacks.onLog?.(data.error || 'runtime error', 'error')
         this.callbacks.onState?.('error')
       }
@@ -74,11 +80,24 @@ export class RuntimeHost {
       this.callbacks.onLog?.('waiting for runtime')
       return
     }
+    if (this.running) {
+      this.iframe.contentWindow?.postMessage({ type: 'esp-claw-sim:stop' }, '*')
+      return
+    }
+    this.pendingApp = null
+    this.running = true
     this.callbacks.onLog?.(`running ${app.entry}`)
-    this.postMountAndRun(app)
+    try {
+      this.postMountAndRun(app)
+    } catch (error) {
+      this.running = false
+      this.callbacks.onLog?.(error instanceof Error ? error.message : String(error), 'error')
+      this.callbacks.onState?.('error')
+    }
   }
 
   stop(): void {
+    this.pendingApp = null
     this.iframe.contentWindow?.postMessage({ type: 'esp-claw-sim:stop' }, '*')
     this.callbacks.onLog?.('stop requested')
   }
@@ -91,16 +110,18 @@ export class RuntimeHost {
     const files = app.files.map((file) => ({
       path: `${app.virtualRoot}/${file.path}`,
       text: file.text,
-      bytes: file.text ? undefined : Array.from(file.content),
+      bytes: file.text !== undefined ? undefined : Array.from(file.content),
     }))
 
+    const bootstrap = '/__simulator__/launch.lua'
+    files.push({ path: bootstrap, text: buildAppBootstrap(app), bytes: undefined })
     this.iframe.contentWindow?.postMessage(
       {
         type: 'esp-claw-sim:mountApp',
         app: {
           id: app.manifest.id,
           root: app.virtualRoot,
-          entry: `${app.virtualRoot}/${app.entry}`,
+          entry: bootstrap,
           files,
           peripherals: app.peripherals,
           capabilityMocks: app.capabilityMocks,
@@ -112,7 +133,7 @@ export class RuntimeHost {
     this.iframe.contentWindow?.postMessage(
       {
         type: 'esp-claw-sim:runApp',
-        path: `${app.virtualRoot}/${app.entry}`,
+        path: bootstrap,
       },
       '*',
     )

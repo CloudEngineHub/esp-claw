@@ -36,6 +36,7 @@ export interface CapabilityMocks {
 }
 
 export interface SimulatorMocks {
+  args?: Record<string, unknown>
   capability?: CapabilityMocks
   network_radio?: {
     stations?: Array<{

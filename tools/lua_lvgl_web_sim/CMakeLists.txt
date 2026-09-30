@@ -64,6 +64,13 @@ set(LUA_SOURCES
 set(ESP_CLAW_SIM_SOURCES
     sim/esp_claw_sim.c
     sim/sim_esp_compat.c
+    sim/lua_display_sim.c
+    ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_display/src/display_color.c
+    ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_display/src/display_dirty.c
+    ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_display/src/display_core.c
+    ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_display/src/display_raster.c
+    ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_display/src/display_text.c
+    ${ESP_CLAW_ROOT}/components/common/esp_painter/font/basic_font_24.c
     ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_lvgl/src/lua_module_lvgl.c
     ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_lvgl/src/lua_lvgl_core_widgets.c
     ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_lvgl/src/lua_lvgl_complex_widgets.c
@@ -88,13 +95,16 @@ set(ESP_CLAW_SIM_RUNTIME_ASSETS "--preload-file ${PROJECT_SOURCE_DIR}/sim_assets
 set(ESP_CLAW_SIM_EMBED_ASSETS "--embed-file ${PROJECT_SOURCE_DIR}/sim_assets/fonts@/fonts")
 
 function(configure_esp_claw_sim_target target_name)
+set_property(TARGET ${target_name} APPEND PROPERTY LINK_DEPENDS "${PROJECT_SOURCE_DIR}/esp_claw_shell.html")
 target_include_directories(${target_name} PRIVATE
     ${LUA_SRC_DIR}
+    ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_display/src
+    ${ESP_CLAW_ROOT}/components/common/esp_painter/include
     ${PROJECT_SOURCE_DIR}/sim/compat
     ${lvgl_SOURCE_DIR}
     ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_lvgl/src
 )
-target_compile_definitions(${target_name} PRIVATE LUA_USE_C89)
+target_compile_definitions(${target_name} PRIVATE LUA_USE_C89 CONFIG_ESP_PAINTER_BASIC_FONT_24=1)
 target_compile_options(${target_name} PRIVATE -O3)
 target_link_libraries(${target_name}
     lvgl

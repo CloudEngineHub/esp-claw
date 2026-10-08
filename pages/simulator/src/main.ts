@@ -278,6 +278,7 @@ function setDisplayResolution(width: number, height: number): void {
   if (widthInput) widthInput.value = String(width)
   if (heightInput) heightInput.value = String(height)
   deviceShell?.style.setProperty('--device-aspect', `${width} / ${height}`)
+  deviceShell?.style.setProperty('--device-ratio', String(width / height))
 }
 
 function applyRequestedResolution(): void {
@@ -418,7 +419,7 @@ function renderLocalPrompt(): void {
 
 function renderApp(loaded: LoadedApp): void {
   document.querySelector<HTMLHeadingElement>('#appName')!.textContent = loaded.manifest.display_name || loaded.manifest.id
-  document.querySelector<HTMLParagraphElement>('#appDescription')!.textContent = 'ESP-Claw Lua LVGL App'
+  document.querySelector<HTMLParagraphElement>('#appDescription')!.textContent = Object.keys(loaded.simulatorMocks.capability ?? {}).length ? '示例数据 · Sample data' : 'ESP-Claw Lua App'
   document.querySelector<HTMLElement>('#entryPath')!.textContent = loaded.entry
   document.querySelector<HTMLElement>('#fileCount')!.textContent = String(loaded.files.length)
 

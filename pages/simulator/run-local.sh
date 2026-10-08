@@ -72,7 +72,7 @@ docker run --rm \
   -v "$BUILD_DIR:/build" \
   -w /work \
   "$IMAGE" \
-  bash -lc 'cleanup() { chown -R "$SIM_HOST_UID:$SIM_HOST_GID" /build; }; trap cleanup EXIT; trap "exit 130" INT; trap "exit 143" TERM; emcmake cmake -S tools/lua_lvgl_web_sim -B /build -G Ninja -DCMAKE_BUILD_TYPE=Release && embuilder build sdl2 && emmake ninja -C /build esp_claw_sim'
+  bash -lc 'cleanup() { chown -R "$SIM_HOST_UID:$SIM_HOST_GID" /build; }; trap cleanup EXIT; trap "exit 130" INT; trap "exit 143" TERM; if ! command -v ninja >/dev/null; then apt-get update && apt-get install -y --no-install-recommends ninja-build; fi; emcmake cmake -S tools/lua_lvgl_web_sim -B /build -G Ninja -DCMAKE_BUILD_TYPE=Release && embuilder build sdl2 && emmake ninja -C /build esp_claw_sim'
 
 cd "$SCRIPT_DIR"
 pnpm install --frozen-lockfile

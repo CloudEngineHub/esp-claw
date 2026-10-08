@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "lua_lvgl_private.h"
+#include "src/misc/cache/instance/lv_image_cache.h"
 
 lua_lvgl_obj_ud_t *lua_lvgl_check_ud(lua_State *L, int index)
 {
@@ -26,6 +27,21 @@ lua_lvgl_obj_ud_t *lua_lvgl_check_ud(lua_State *L, int index)
     }
     luaL_argerror(L, index, "lvgl object expected");
     return NULL;
+}
+
+/* Returns a live object with the LVGL lock held; the caller must unlock. */
+lv_obj_t *lua_lvgl_lock_widget(lua_State *L, lua_lvgl_obj_ud_t *ud, lua_lvgl_obj_type_t expected)
+{
+    esp_err_t err = lua_lvgl_lock();
+    if (err != ESP_OK) lua_lvgl_error_esp(L, "lock", err);
+    const char *error = NULL;
+    lua_lvgl_obj_type_t type;
+    lv_obj_t *obj = lua_lvgl_validate_ud_locked(ud, &type, &error);
+    if (!obj || type != expected) {
+        lua_lvgl_unlock();
+        luaL_error(L, "%s", obj ? "lvgl widget type mismatch" : error);
+    }
+    return obj;
 }
 
 void lua_lvgl_record_release_resources(lua_lvgl_obj_record_t *record)
@@ -53,6 +69,7 @@ void lua_lvgl_record_release_resources(lua_lvgl_obj_record_t *record)
         record->string_array = NULL;
         record->string_array_count = 0;
     }
+    if (record->type == LUA_LVGL_OBJ_IMAGE && record->data2) lv_image_cache_drop(record->data2);
     free(record->data);
     record->data = NULL;
     record->data_size = 0;
@@ -189,6 +206,57 @@ int lua_lvgl_clean(lua_State *L)
         return luaL_error(L, "%s", obj_error);
     }
     lv_obj_clean(obj);
+    lua_lvgl_unlock();
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+static lv_obj_t *lock_object(lua_State *L)
+{
+    lua_lvgl_obj_ud_t *ud = lua_lvgl_check_ud(L, 1);
+    esp_err_t err = lua_lvgl_lock();
+    if (err != ESP_OK) lua_lvgl_error_esp(L, "lock", err);
+    const char *error = NULL;
+    lv_obj_t *obj = lua_lvgl_validate_ud_locked(ud, NULL, &error);
+    if (!obj) {
+        lua_lvgl_unlock();
+        luaL_error(L, "%s", error);
+    }
+    return obj;
+}
+
+static int set_object_flag(lua_State *L, bool enabled)
+{
+    static const char *const names[] = {"CLICKABLE", "PRESS_LOCK", "SCROLLABLE", "HIDDEN", NULL};
+    static const lv_obj_flag_t flags[] = {LV_OBJ_FLAG_CLICKABLE, LV_OBJ_FLAG_PRESS_LOCK, LV_OBJ_FLAG_SCROLLABLE, LV_OBJ_FLAG_HIDDEN};
+    /* Parse before locking: Lua argument errors unwind the C stack. */
+    int index = luaL_checkoption(L, 2, NULL, names);
+    lv_obj_t *obj = lock_object(L);
+    if (enabled) lv_obj_add_flag(obj, flags[index]);
+    else lv_obj_remove_flag(obj, flags[index]);
+    lua_lvgl_unlock();
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+int lua_lvgl_add_flag(lua_State *L)
+{
+    return set_object_flag(L, true);
+}
+
+int lua_lvgl_clear_flag(lua_State *L)
+{
+    return set_object_flag(L, false);
+}
+
+int lua_lvgl_move_foreground(lua_State *L)
+{
+    lv_obj_t *obj = lock_object(L);
+    if (!lv_obj_get_parent(obj)) {
+        lua_lvgl_unlock();
+        return luaL_error(L, "lvgl move_foreground requires a child object");
+    }
+    lv_obj_move_foreground(obj);
     lua_lvgl_unlock();
     lua_pushboolean(L, 1);
     return 1;

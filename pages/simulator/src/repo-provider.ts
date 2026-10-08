@@ -25,7 +25,7 @@ function getSkillsLabSiteRoot(webBase: string): string {
 }
 
 function buildSkillsLabAppUrl(webBase: string, appId: string): string {
-  return `${getSkillsLabSiteRoot(webBase)}/app/${encodeURIComponent(appId)}`
+  return `${getSkillsLabSiteRoot(webBase)}/zh-cn/app/${encodeURIComponent(appId)}`
 }
 
 export function getRepoConfig(id: string): RepoConfig {
@@ -44,7 +44,7 @@ export function buildRawUrl(params: SimulatorParams, relativePath: string): stri
     if (!match) {
       throw new Error(`invalid Skills Lab path: ${path}`)
     }
-    return `${repo.rawBase.replace(/\/+$/, '')}/${encodeURIComponent(match[1])}/${match[2]}`
+    return `${repo.rawBase.replace(/\/+$/, '')}/apps/${encodeURIComponent(match[1])}/${match[2]}`
   }
   return `${repo.rawBase}/${encodeURIComponent(params.ref)}/${path}`
 }
@@ -85,9 +85,10 @@ export async function fetchAppFileList(params: SimulatorParams, appId: string): 
 
   const apps = await response.json() as unknown
   if (!Array.isArray(apps)) throw new Error('App index must define an array')
-  const app = apps.find((item): item is { id: string; files: string[] } => Boolean(item && typeof item === 'object' && (item as { id?: unknown }).id === appId))
+  const app = apps.find((item): item is { id: string; files: string[]; simulator?: boolean } => Boolean(item && typeof item === 'object' && (item as { id?: unknown }).id === appId))
   if (!app || !Array.isArray(app.files) || app.files.some((file) => typeof file !== 'string')) {
     throw new Error(`App file list not found: ${appId}`)
   }
+  if (app.simulator !== true) throw new Error(`App ${appId} is not enabled for browser simulation`)
   return app.files
 }

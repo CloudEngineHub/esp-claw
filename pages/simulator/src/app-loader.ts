@@ -40,7 +40,12 @@ function decodeText(path: string, data: Uint8Array): string | undefined {
 
 function parseSimulatorMocks(text: string): SimulatorMocks {
   const parsed = JSON.parse(text) as SimulatorMocks
-  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    if (parsed.args !== undefined && (!parsed.args || typeof parsed.args !== 'object' || Array.isArray(parsed.args))) {
+      throw new Error(`${SIMULATOR_MOCK_FILE} args must define an object`)
+    }
+    return parsed
+  }
   throw new Error(`${SIMULATOR_MOCK_FILE} must define an object`)
 }
 

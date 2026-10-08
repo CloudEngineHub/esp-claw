@@ -13,9 +13,11 @@
 #include "lauxlib.h"
 
 #define DISPLAY_SCREEN_MT "display.screen"
+#define DISPLAY_FONT_MT "display.font"
 static const char *TAG = "lua_display";
 static char s_registry_screen_key;
 typedef struct { display_handle_t handle; } lua_display_screen_t;
+typedef struct { display_font_handle_t handle; } lua_display_font_t;
 
 /* Keep argument and drawing semantics aligned with lua_module_display.c. */
 static int lua_display_error(lua_State *L, const char *operation, esp_err_t err)
@@ -375,6 +377,28 @@ static int lua_display_touch(lua_State *L)
     return 1;
 }
 
+static int lua_display_font_close(lua_State *L)
+{
+    lua_display_font_t *font = luaL_checkudata(L, 1, DISPLAY_FONT_MT);
+    display_font_delete(font->handle);
+    font->handle = NULL;
+    return 0;
+}
+
+static int lua_display_load_font(lua_State *L)
+{
+    const char *path = luaL_checkstring(L, 1);
+    lua_display_font_t *font = lua_newuserdata(L, sizeof(*font));
+    font->handle = NULL;
+    luaL_getmetatable(L, DISPLAY_FONT_MT);
+    lua_setmetatable(L, -2);
+    display_font_handle_t handle = NULL;
+    esp_err_t err = display_font_create(path, &handle);
+    if (err != ESP_OK) return lua_display_error(L, "load_font", err);
+    font->handle = handle;
+    return 1;
+}
+
 static display_text_options_t lua_display_text_options(lua_State *L, int index)
 {
     display_text_options_t options = { .font_size = 24, .color = {.r = 255, .g = 255, .b = 255, .a = 255} };
@@ -386,7 +410,9 @@ static display_text_options_t lua_display_text_options(lua_State *L, int index)
     lua_pop(L, 1);
     lua_display_raw_field(L, index, "font");
     if (!lua_isnil(L, -1)) {
-        luaL_error(L, "display custom fonts are not supported in the simulator");
+        lua_display_font_t *font = luaL_checkudata(L, -1, DISPLAY_FONT_MT);
+        if (font->handle == NULL) luaL_error(L, "display font is closed");
+        options.font = font->handle;
     }
     lua_pop(L, 1);
     return options;
@@ -420,7 +446,7 @@ static int lua_display_text(lua_State *L)
 
 static int lua_display_unsupported(lua_State *L)
 {
-    return luaL_error(L, "display images and custom fonts are not supported in the simulator");
+    return luaL_error(L, "display images are not supported in the simulator");
 }
 
 static const luaL_Reg s_screen_methods[] = {
@@ -449,9 +475,15 @@ int luaopen_display(lua_State *L)
         lua_newtable(L); luaL_setfuncs(L, s_screen_methods, 0); lua_setfield(L, -2, "__index");
     }
     lua_pop(L, 1);
+    if (luaL_newmetatable(L, DISPLAY_FONT_MT)) {
+        lua_pushcfunction(L, lua_display_font_close); lua_setfield(L, -2, "__gc");
+        lua_pushcfunction(L, lua_display_font_close); lua_setfield(L, -2, "__close");
+        lua_newtable(L); lua_pushcfunction(L, lua_display_font_close); lua_setfield(L, -2, "close"); lua_setfield(L, -2, "__index");
+    }
+    lua_pop(L, 1);
     lua_createtable(L, 0, 3);
     lua_pushcfunction(L, lua_display_open); lua_setfield(L, -2, "open");
     lua_pushcfunction(L, lua_display_pack_color); lua_setfield(L, -2, "color");
-    lua_pushcfunction(L, lua_display_unsupported); lua_setfield(L, -2, "load_font");
+    lua_pushcfunction(L, lua_display_load_font); lua_setfield(L, -2, "load_font");
     return 1;
 }

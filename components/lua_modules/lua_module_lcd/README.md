@@ -1,5 +1,7 @@
 # Lua LCD
 
+**Current availability:** `lcd.new(...)` returns an error until hardware resource ownership is integrated. Enabling this component does not enable construction; the examples below describe the API, not a currently runnable workflow. Use `display.open()` for the board-managed screen.
+
 This optional module describes how to use `lcd` in builds that enable it. The provided ESP-S3 board configurations currently disable it. `display.open()` uses only the built-in screen managed by the display service and does not accept panel or IO handles created by `lcd`.
 
 `lcd` is a panel bring-up module. It can:

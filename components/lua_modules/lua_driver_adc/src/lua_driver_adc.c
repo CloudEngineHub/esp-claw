@@ -6,6 +6,7 @@
 #include "lua_driver_adc.h"
 
 #include <stdbool.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "cap_lua.h"
@@ -18,6 +19,7 @@
 #include "freertos/semphr.h"
 #include "hal/adc_types.h"
 #include "lauxlib.h"
+#include "cap_lua_hw.h"
 #include "soc/soc_caps.h"
 
 #define LUA_DRIVER_ADC_METATABLE "adc.channel"
@@ -34,6 +36,8 @@
 static const char *TAG = "lua_adc";
 
 typedef struct {
+    cap_lua_hw_lease_t lease;
+    bool closing;
     adc_oneshot_unit_handle_t unit;
     adc_cali_handle_t cali;
     esp_err_t cali_err;
@@ -45,11 +49,12 @@ typedef struct {
 } lua_driver_adc_ud_t;
 
 static adc_oneshot_unit_handle_t s_units[SOC_ADC_PERIPH_NUM];
+static cap_lua_hw_lease_t s_unit_leases[SOC_ADC_PERIPH_NUM];
 static int s_unit_refcount[SOC_ADC_PERIPH_NUM];
 static bool s_active_gpios[SOC_GPIO_PIN_COUNT];
 static SemaphoreHandle_t s_units_lock;
 
-static esp_err_t lua_driver_adc_acquire_channel(int gpio, adc_unit_t unit_id, adc_channel_t channel, adc_atten_t atten,
+static esp_err_t lua_driver_adc_acquire_channel(lua_State *L, int gpio, adc_unit_t unit_id, adc_channel_t channel, adc_atten_t atten,
                                                 adc_bitwidth_t bitwidth, adc_oneshot_unit_handle_t *out_unit)
 {
     if ((unsigned)gpio >= SOC_GPIO_PIN_COUNT || (unsigned)unit_id >= SOC_ADC_PERIPH_NUM) {
@@ -64,13 +69,26 @@ static esp_err_t lua_driver_adc_acquire_channel(int gpio, adc_unit_t unit_id, ad
 
     esp_err_t err = ESP_OK;
     bool unit_created = false;
+    if (s_units[unit_id] != NULL && s_unit_leases[unit_id].registry != cap_lua_hw_get_registry(L)) {
+        xSemaphoreGive(s_units_lock);
+        return ESP_ERR_INVALID_STATE;
+    }
     if (s_units[unit_id] == NULL) {
+        char key[CLAW_HW_KEY_SIZE];
+        snprintf(key, sizeof(key), "adc_unit:%d", unit_id);
+        const char *keys[] = { key };
+        err = cap_lua_hw_claim(L, &s_unit_leases[unit_id], "lua/adc-unit", keys, 1);
+        if (err != ESP_OK) {
+            xSemaphoreGive(s_units_lock);
+            return err;
+        }
         adc_oneshot_unit_init_cfg_t cfg = {
             .unit_id = unit_id,
         };
         err = adc_oneshot_new_unit(&cfg, &s_units[unit_id]);
         if (err != ESP_OK) {
             s_units[unit_id] = NULL;
+            cap_lua_hw_release(&s_unit_leases[unit_id]);
             xSemaphoreGive(s_units_lock);
             return err;
         }
@@ -87,7 +105,11 @@ static esp_err_t lua_driver_adc_acquire_channel(int gpio, adc_unit_t unit_id, ad
             esp_err_t delete_err = adc_oneshot_del_unit(s_units[unit_id]);
             if (delete_err == ESP_OK) {
                 s_units[unit_id] = NULL;
+                cap_lua_hw_release(&s_unit_leases[unit_id]);
             } else {
+                s_active_gpios[gpio] = true;
+                s_unit_refcount[unit_id]++;
+                *out_unit = s_units[unit_id];
                 ESP_LOGE(TAG, "Failed to roll back ADC unit %d: %s", (int)unit_id + 1, esp_err_to_name(delete_err));
             }
         }
@@ -102,25 +124,25 @@ static esp_err_t lua_driver_adc_acquire_channel(int gpio, adc_unit_t unit_id, ad
     return ESP_OK;
 }
 
-static void lua_driver_adc_release_channel(int gpio, adc_unit_t unit_id)
+static esp_err_t lua_driver_adc_release_channel(int gpio, adc_unit_t unit_id)
 {
-    if ((unsigned)gpio >= SOC_GPIO_PIN_COUNT || (unsigned)unit_id >= SOC_ADC_PERIPH_NUM) {
-        return;
-    }
-
     xSemaphoreTake(s_units_lock, portMAX_DELAY);
+    esp_err_t err = ESP_OK;
     if (s_active_gpios[gpio]) {
-        s_active_gpios[gpio] = false;
-        if (s_units[unit_id] != NULL && s_unit_refcount[unit_id] > 0 && --s_unit_refcount[unit_id] == 0) {
-            esp_err_t err = adc_oneshot_del_unit(s_units[unit_id]);
-            if (err != ESP_OK) {
-                ESP_LOGE(TAG, "Failed to delete ADC unit %d: %s", (int)unit_id + 1, esp_err_to_name(err));
-            } else {
+        if (s_unit_refcount[unit_id] == 1) {
+            err = s_units[unit_id] ? adc_oneshot_del_unit(s_units[unit_id]) : ESP_OK;
+            if (err == ESP_OK) {
                 s_units[unit_id] = NULL;
+                err = cap_lua_hw_release(&s_unit_leases[unit_id]);
             }
+        }
+        if (err == ESP_OK) {
+            s_active_gpios[gpio] = false;
+            s_unit_refcount[unit_id]--;
         }
     }
     xSemaphoreGive(s_units_lock);
+    return err;
 }
 
 static esp_err_t lua_driver_adc_try_calibrate(lua_driver_adc_ud_t *ud)
@@ -147,10 +169,10 @@ static esp_err_t lua_driver_adc_try_calibrate(lua_driver_adc_ud_t *ud)
 #endif
 }
 
-static void lua_driver_adc_release_cali(lua_driver_adc_ud_t *ud)
+static esp_err_t lua_driver_adc_release_cali(lua_driver_adc_ud_t *ud)
 {
     if (ud->cali == NULL) {
-        return;
+        return ESP_OK;
     }
 #if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
     esp_err_t err = adc_cali_delete_scheme_curve_fitting(ud->cali);
@@ -160,16 +182,18 @@ static void lua_driver_adc_release_cali(lua_driver_adc_ud_t *ud)
 #if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED || ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to delete ADC calibration for GPIO %d: %s", ud->gpio_num, esp_err_to_name(err));
+        return err;
     }
 #endif
     ud->cali = NULL;
+    return ESP_OK;
 }
 
 static lua_driver_adc_ud_t *lua_driver_adc_get_ud(lua_State *L, int idx)
 {
     lua_driver_adc_ud_t *ud = (lua_driver_adc_ud_t *)luaL_checkudata(
         L, idx, LUA_DRIVER_ADC_METATABLE);
-    if (!ud || !ud->unit) {
+    if (!ud || !ud->unit || ud->closing) {
         luaL_error(L, "adc channel: invalid or closed handle");
     }
     return ud;
@@ -219,6 +243,8 @@ static void lua_driver_adc_parse_config(lua_State *L, adc_atten_t *atten, adc_bi
     *bitwidth = (adc_bitwidth_t)bitwidth_value;
 }
 
+static esp_err_t lua_driver_adc_close_ud(lua_driver_adc_ud_t *ud);
+
 static int lua_driver_adc_new(lua_State *L)
 {
     lua_Integer gpio_value = luaL_checkinteger(L, 1);
@@ -246,8 +272,15 @@ static int lua_driver_adc_new(lua_State *L)
     luaL_getmetatable(L, LUA_DRIVER_ADC_METATABLE);
     lua_setmetatable(L, -2);
 
-    err = lua_driver_adc_acquire_channel(gpio, unit_id, channel, atten, bitwidth, &ud->unit);
+    char key_buf[2][32];
+    snprintf(key_buf[0], sizeof(key_buf[0]), "gpio:%d", gpio);
+    snprintf(key_buf[1], sizeof(key_buf[1]), "adc_channel:%d:%d", unit_id, channel);
+    const char *keys[] = { key_buf[0], key_buf[1] };
+    err = cap_lua_hw_claim(L, &ud->lease, "lua/adc-channel", keys, 2);
+    if (err != ESP_OK) return luaL_error(L, "adc claim failed: %s", esp_err_to_name(err));
+    err = lua_driver_adc_acquire_channel(L, gpio, unit_id, channel, atten, bitwidth, &ud->unit);
     if (err != ESP_OK) {
+        (void)lua_driver_adc_close_ud(ud);
         if (err == ESP_ERR_INVALID_STATE) {
             return luaL_error(L, "GPIO %d already has an active ADC channel", gpio);
         }
@@ -316,13 +349,17 @@ static int lua_driver_adc_get_config(lua_State *L)
     return 1;
 }
 
-static void lua_driver_adc_close_ud(lua_driver_adc_ud_t *ud)
+static esp_err_t lua_driver_adc_close_ud(lua_driver_adc_ud_t *ud)
 {
-    lua_driver_adc_release_cali(ud);
+    ud->closing = true;
+    esp_err_t cali_err = lua_driver_adc_release_cali(ud);
+    if (cali_err != ESP_OK) return cali_err;
     if (ud->unit != NULL) {
-        lua_driver_adc_release_channel(ud->gpio_num, ud->unit_id);
+        esp_err_t err = lua_driver_adc_release_channel(ud->gpio_num, ud->unit_id);
+        if (err != ESP_OK) return err;
         ud->unit = NULL;
     }
+    return cap_lua_hw_release(&ud->lease);
 }
 
 static int lua_driver_adc_gc(lua_State *L)
@@ -339,7 +376,8 @@ static int lua_driver_adc_close(lua_State *L)
 {
     lua_driver_adc_ud_t *ud = (lua_driver_adc_ud_t *)luaL_checkudata(
         L, 1, LUA_DRIVER_ADC_METATABLE);
-    lua_driver_adc_close_ud(ud);
+    esp_err_t err = lua_driver_adc_close_ud(ud);
+    if (err != ESP_OK) return luaL_error(L, "adc close failed: %s", esp_err_to_name(err));
     return 0;
 }
 

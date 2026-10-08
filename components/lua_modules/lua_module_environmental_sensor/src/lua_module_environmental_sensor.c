@@ -955,6 +955,8 @@ static bool lua_module_environmental_sensor_table_has_field(lua_State *L, int id
 
 static int lua_module_environmental_sensor_new(lua_State *L)
 {
+    return luaL_error(L, "lua_module_environmental_sensor: raw hardware creation is not supported until resource ownership is integrated");
+
     const char *backend_type = NULL;
 
     if (lua_istable(L, 1)) {

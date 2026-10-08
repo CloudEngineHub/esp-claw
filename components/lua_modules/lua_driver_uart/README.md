@@ -10,7 +10,7 @@ This module describes how to open a UART port and read/write bytes or text lines
     opening it from a script will fight the bootloader / `printf` output.
     Each port has a single owner; a second `uart.new()` for the same
     port raises a Lua error.
-  - `tx`, `rx`: GPIO numbers for TX and RX pins
+  - `tx`, `rx`: Explicit GPIO numbers for TX and RX pins; `-1` is not accepted
   - `baud`: baud rate, e.g. `9600`, `115200`
   - `opts` (optional table, omit entirely for the common **8N1** case):
     - `data_bits`: `5`–`8`, default `8`
@@ -29,8 +29,7 @@ This module describes how to open a UART port and read/write bytes or text lines
   of byte integers `0..255`.
 - `u:available()` → number of bytes currently sitting in the RX buffer.
 - `u:flush_input()` → discard all buffered RX data.
-- `u:close()` when you're done. Handles are also cleaned up on garbage
-  collection; explicit close is preferred for determinism.
+- `u:close()` when you're done. Job shutdown also closes retained handles; explicit close releases resources immediately.
 
 ## Example: AT-command style request/response
 ```lua
@@ -81,3 +80,5 @@ local u = uart.new(1, 17, 18, 9600, {
   interrupt interface in this module. For high-rate data, poll often
   enough to drain the 1 KiB RX buffer before it overruns.
 - Closing a port releases it; the same `port` number can then be reopened with different settings.
+
+Hardware GPIOs are claimed before configuration. Occupied or unavailable resources raise an error; `close()` releases ownership only after hardware cleanup succeeds. Failed cleanup retains ownership for retry.

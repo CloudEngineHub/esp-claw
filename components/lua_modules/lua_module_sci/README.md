@@ -1,5 +1,7 @@
 # Lua DFRobot SCI
 
+**Current availability:** `sci.new(...)` returns an error until hardware resource ownership is integrated. Enabling this component does not enable construction; the examples below describe the API, not a currently runnable workflow.
+
 This module provides access to the DFRobot RP2040 SCI Acquisition Module
 (DFR0999) from Lua. It talks to the SCI board over I2C and returns sensor data
 in the DFRobot SCI string format.

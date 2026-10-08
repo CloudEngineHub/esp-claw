@@ -41,7 +41,7 @@ static esp_err_t icm42670_backend_probe(lua_imu_backend_ctx_t *ctx, uint8_t i2c_
 {
     icm42670_state_t *st = (icm42670_state_t *)ctx->state;
 
-    i2c_master_bus_handle_t i2c_master_handle = i2c_bus_get_internal_bus_handle(ctx->i2c_bus_handle);
+    i2c_master_bus_handle_t i2c_master_handle = ctx->master_bus;
     if (i2c_master_handle == NULL) {
         ESP_LOGE(TAG, "Failed to resolve internal I2C handle");
         return ESP_FAIL;
@@ -55,21 +55,20 @@ static esp_err_t icm42670_backend_probe(lua_imu_backend_ctx_t *ctx, uint8_t i2c_
 
     err = icm42670_apply_default_runtime_config(st->sensor_handle);
     if (err != ESP_OK) {
-        icm42670_delete(st->sensor_handle);
-        st->sensor_handle = NULL;
         return err;
     }
     ctx->i2c_addr = i2c_addr;
     return ESP_OK;
 }
 
-static void icm42670_backend_destroy(lua_imu_backend_ctx_t *ctx)
+static esp_err_t icm42670_backend_destroy(lua_imu_backend_ctx_t *ctx)
 {
-    icm42670_state_t *st = (icm42670_state_t *)ctx->state;
-    if (st->sensor_handle != NULL) {
+    icm42670_state_t *st = ctx->state;
+    if (st->sensor_handle) {
         icm42670_delete(st->sensor_handle);
         st->sensor_handle = NULL;
     }
+    return ESP_OK;
 }
 
 static esp_err_t icm42670_backend_read_sample(lua_imu_backend_ctx_t *ctx, lua_imu_sample_t *out)

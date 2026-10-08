@@ -17,8 +17,7 @@ This module describes how to read raw samples and calibrated millivolts from an 
 - `ch:is_calibrated()` -> whether calibrated millivolt reads are available.
 - `ch:get_config()` -> a table containing `gpio`, `atten`, and the resolved
   `bitwidth` used by the chip.
-- `ch:close()` when you're done. Handles are also cleaned up on garbage
-  collection and support Lua's `<close>` variables.
+- Call `ch:close()` when done, or use Lua's `<close>` variables. Unreachable handles are finalized by Lua GC; job exit closes remaining handles. Retry a failed explicit close before dropping the handle.
 
 The module exports `ATTEN_DB_0`, `ATTEN_DB_2_5`, `ATTEN_DB_6`, `ATTEN_DB_12`,
 `BITWIDTH_DEFAULT`, and `BITWIDTH_9` through `BITWIDTH_13`.

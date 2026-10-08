@@ -9,8 +9,6 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "app_claw_hw_bridge.h"
-#include "claw_hw_registry.h"
 #include "devices/dev_display_lcd/dev_display_lcd.h"
 #include "devices/dev_lcd_touch/dev_lcd_touch.h"
 #include "esp_board_manager_includes.h"
@@ -120,11 +118,6 @@ typedef struct {
 } display_service_state_t;
 
 EXT_RAM_BSS_ATTR static display_service_state_t s_display;
-
-/* Exclusive leases held under "compositor/display" while the service runs;
- * NULL when not held. */
-static claw_hw_lease_handle_t s_display_lcd_lease;
-static claw_hw_lease_handle_t s_lcd_touch_lease;
 
 static esp_err_t display_service_scene_acquire_ex(const display_service_scene_config_t *config);
 static esp_err_t display_service_scene_load_screen(void *owner_ctx, lv_obj_t *screen);
@@ -651,34 +644,6 @@ esp_err_t display_service_start(const display_service_config_t *config)
         return ESP_OK;
     }
 
-    /* Lease display_lcd + (optional) lcd_touch exclusively under
-     * "compositor/display" before touching any hardware. On failure below
-     * we fall through to `fail:` which calls display_service_stop(); that
-     * release path drops both leases. */
-    ret = app_claw_hw_lease_device("display_lcd", "compositor/display",
-                                   CLAW_HW_MODE_EXCLUSIVE,
-                                   &s_display_lcd_lease, NULL);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "display_lcd lease failed: %s", esp_err_to_name(ret));
-        s_display_lcd_lease = NULL;
-        return ret;
-    }
-    {
-        /* Touch is optional. */
-        esp_err_t touch_err = app_claw_hw_lease_device("lcd_touch", "compositor/display",
-                                                       CLAW_HW_MODE_EXCLUSIVE,
-                                                       &s_lcd_touch_lease, NULL);
-        if (touch_err == ESP_ERR_NOT_FOUND) {
-            s_lcd_touch_lease = NULL;
-        } else if (touch_err != ESP_OK) {
-            ESP_LOGW(TAG, "lcd_touch lease failed: %s", esp_err_to_name(touch_err));
-            claw_hw_release(s_display_lcd_lease);
-            s_display_lcd_lease = NULL;
-            s_lcd_touch_lease = NULL;
-            return touch_err;
-        }
-    }
-
     ESP_GOTO_ON_ERROR(display_service_load_board_display(&lcd_cfg, &lcd_handles), fail, TAG, "load display failed");
     display_service_load_board_touch();
     s_display.info.touch_available = s_display.touch != NULL;
@@ -786,14 +751,6 @@ void display_service_stop(void)
     s_display.scene_flags = 0;
     s_display.dummy_draw_enabled = false;
     s_display.dummy_draw_suspended = false;
-    if (s_lcd_touch_lease) {
-        claw_hw_release(s_lcd_touch_lease);
-        s_lcd_touch_lease = NULL;
-    }
-    if (s_display_lcd_lease) {
-        claw_hw_release(s_display_lcd_lease);
-        s_display_lcd_lease = NULL;
-    }
 }
 
 bool display_service_is_started(void)

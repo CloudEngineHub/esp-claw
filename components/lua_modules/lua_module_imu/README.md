@@ -8,28 +8,18 @@ When a request mentions `bmi270`, `icm42670`, `mpu6050`, `imu`, `accelerometer`,
 - Open the sensor with one of:
   - `local sensor = imu.new()` — use board defaults from the device named `imu_sensor`
   - `local sensor = imu.new("imu_sensor")` — choose a device name explicitly
-  - `local sensor = imu.new({ peripheral = "i2c_master", int_gpio = 21 })` — provide options directly
-  - `local sensor = imu.new("imu_sensor", { frequency = 100000 })` — board defaults + per-field overrides
+  - `local sensor = imu.new({ device = "imu_sensor" })` — select the board device through an options table
 - Call `local sample = sensor:read()` to get accel and gyro raw data
 - Call `local temp = sensor:read_temperature()` to read the raw temperature value
 - Call `local status = sensor:read_int_status()` to get the interrupt status bits
 - Call `sensor:name()` to read the resolved board device name
 - Call `sensor:close()` when needed
 
-## Options table
-All fields are optional. Any field omitted falls back to the board
-`board_devices.yaml` value for the device named by `device` (default
-`"imu_sensor"`). On a board that does not declare the device, missing
-required fields will raise an error.
+The board must publish its initialized I2C bus. Each sensor instance atomically claims its I2C address and configured INT/SDO GPIOs, together with a shared borrow of that bus. `custom`/`init_skip` configuration alone does not reserve these resources. Two instances of the same IMU, or a raw GPIO/I2C consumer using the same resources, conflict before hardware initialization. Use `sensor:close()` for prompt release; Lua GC and job exit also finalize handles. Retry a failed explicit close before dropping the handle.
 
-| Field        | Type     | Meaning                                                       |
-|--------------|----------|---------------------------------------------------------------|
-| `device`     | string   | Board device name to read defaults from (default `imu_sensor`)|
-| `peripheral` | string   | Board I2C master peripheral name (e.g. `"i2c_master"`)        |
-| `i2c_addr`   | integer  | Selected backend's 7-bit I2C address (default `0x68`)         |
-| `frequency`  | integer  | I2C clock in Hz (default `400000`)                            |
-| `int_gpio`   | integer  | GPIO number wired to the sensor interrupt pin                 |
-| `sdo_gpio`   | integer  | Optional address-select pin; for MPU6050 it drives `AD0`      |
+## Options table
+
+Only `device` is accepted, defaulting to `"imu_sensor"`. Bus selection, I2C address, clock, interrupt pin, and address-select pin come from the board configuration. Lua hardware overrides are rejected; update the board configuration when wiring changes.
 
 ## Data format
 - `sample.accel.x`, `sample.accel.y`, `sample.accel.z`

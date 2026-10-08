@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * MPU6050 backend for lua_module_imu. Uses direct i2c_bus device access
+ * MPU6050 backend for lua_module_imu. Uses native I2C device access
  * via the helpers exposed by the main module.
  */
 
@@ -31,7 +31,7 @@ static int8_t mpu6050_iface_read(uint8_t reg_addr, uint8_t *data, uint32_t len, 
     if (st == NULL || st->owner_ctx == NULL || st->owner_ctx->i2c_dev_handle == NULL) {
         return MPU6050_E_COM_FAIL;
     }
-    return (i2c_bus_read_bytes(st->owner_ctx->i2c_dev_handle, reg_addr, len, data) == ESP_OK) ?
+    return (i2c_master_transmit_receive(st->owner_ctx->i2c_dev_handle, &reg_addr, 1, data, len, 1000) == ESP_OK) ?
            MPU6050_OK : MPU6050_E_COM_FAIL;
 }
 
@@ -41,7 +41,11 @@ static int8_t mpu6050_iface_write(uint8_t reg_addr, const uint8_t *data, uint32_
     if (st == NULL || st->owner_ctx == NULL || st->owner_ctx->i2c_dev_handle == NULL) {
         return MPU6050_E_COM_FAIL;
     }
-    return (i2c_bus_write_bytes(st->owner_ctx->i2c_dev_handle, reg_addr, len, data) == ESP_OK) ?
+    i2c_master_transmit_multi_buffer_info_t buffers[] = {
+        { .write_buffer = &reg_addr, .buffer_size = 1 },
+        { .write_buffer = (uint8_t *)data, .buffer_size = len },
+    };
+    return (i2c_master_multi_buffer_transmit(st->owner_ctx->i2c_dev_handle, buffers, 2, 1000) == ESP_OK) ?
            MPU6050_OK : MPU6050_E_COM_FAIL;
 }
 

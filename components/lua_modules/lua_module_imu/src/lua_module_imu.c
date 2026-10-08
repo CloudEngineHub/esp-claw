@@ -22,6 +22,8 @@
 #include "freertos/task.h"
 #include "i2c_bus.h"
 #include "lauxlib.h"
+#include "cap_lua_hw.h"
+#include "soc/soc_caps.h"
 
 #include "lua_module_imu_backend.h"
 
@@ -29,6 +31,8 @@
 #define LUA_IMU_DEFAULT_DEVICE   "imu_sensor"
 #define LUA_IMU_MAX_NAME_LEN     64
 #define LUA_IMU_DEFAULT_FREQ_HZ  400000
+#define LUA_IMU_MAX_RESOURCES    4
+#define LUA_IMU_RESOURCE_KEY_SIZE 24
 
 typedef struct {
     lua_imu_backend_ctx_t ctx;
@@ -41,26 +45,11 @@ typedef struct {
 
 typedef struct {
     lua_imu_handle_t *handle;
+    cap_lua_hw_lease_t lease;
     char device_name[LUA_IMU_MAX_NAME_LEN];
 } lua_imu_ud_t;
 
-/*
- * Local mirror of the dev_custom_imu_sensor_config_t struct that the ESP
- * Board Manager auto-generates from the board's board_devices.yaml.
- *
- * IMPORTANT: This MUST be byte-for-byte identical to the auto-generated
- * struct. The auto-generator emits fields in the order they appear in the
- * YAML schema, and silently omits any field missing from the YAML. If a
- * board's YAML drops a field, the generated struct shrinks and our cast
- * would read garbage from neighbouring fields (e.g. mistaking the next
- * field as `sdo_gpio_num` and "discovering" GPIO0).
- *
- * To make such a divergence impossible, `lua_imu_resolve_board_cfg()`
- * below cross-checks the size reported by the board manager descriptor
- * against `sizeof(lua_imu_board_cfg_t)` and refuses to use the config if
- * they differ. When that fails, fix the board's board_devices.yaml so
- * every field listed here is present (use `-1` for unused GPIOs).
- */
+/* YAML must include unused pins as -1; padding can hide omitted fields from sizeof. */
 typedef struct {
     const char *name;
     const char *type;
@@ -88,7 +77,7 @@ typedef struct {
 
 static const char *TAG = "lua_module_imu";
 
-static void lua_imu_destroy_handle(lua_imu_handle_t *handle);
+static esp_err_t lua_imu_destroy_handle(lua_imu_handle_t *handle);
 
 esp_err_t lua_imu_ctx_select_addr(lua_imu_backend_ctx_t *ctx, uint8_t i2c_addr)
 {
@@ -96,11 +85,15 @@ esp_err_t lua_imu_ctx_select_addr(lua_imu_backend_ctx_t *ctx, uint8_t i2c_addr)
         return ESP_OK;
     }
     if (ctx->i2c_dev_handle != NULL) {
-        i2c_bus_device_delete(&ctx->i2c_dev_handle);
+        esp_err_t err = i2c_master_bus_rm_device(ctx->i2c_dev_handle);
+        if (err != ESP_OK) return err;
         ctx->i2c_dev_handle = NULL;
     }
-    ctx->i2c_dev_handle = i2c_bus_device_create(ctx->i2c_bus_handle, i2c_addr, 0);
-    if (ctx->i2c_dev_handle == NULL) {
+    i2c_device_config_t config = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7, .device_address = i2c_addr, .scl_speed_hz = ctx->frequency,
+    };
+    esp_err_t err = i2c_master_bus_add_device(ctx->master_bus, &config, &ctx->i2c_dev_handle);
+    if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to create IMU I2C device for address 0x%02x", i2c_addr);
         return ESP_FAIL;
     }
@@ -150,7 +143,7 @@ static esp_err_t lua_imu_configure_sdo_pin(int sdo_gpio_num, int level)
 
 static esp_err_t lua_imu_open_i2c_bus(const char *peripheral_name,
                                       int frequency,
-                                      i2c_bus_handle_t *i2c_bus_handle,
+                                      lua_imu_backend_ctx_t *ctx,
                                       bool *peripheral_ref_held)
 {
     i2c_master_bus_handle_t i2c_master_handle = NULL;
@@ -171,23 +164,9 @@ static esp_err_t lua_imu_open_i2c_bus(const char *peripheral_name,
         return err;
     }
 
-    const i2c_config_t i2c_bus_cfg = {
-        .mode = I2C_MODE_MASTER,
-        .sda_io_num = i2c_master_cfg->sda_io_num,
-        .scl_io_num = i2c_master_cfg->scl_io_num,
-        .sda_pullup_en = i2c_master_cfg->flags.enable_internal_pullup,
-        .scl_pullup_en = i2c_master_cfg->flags.enable_internal_pullup,
-        .master.clk_speed = (uint32_t)frequency,
-        .clk_flags = 0,
-    };
+    ctx->master_bus = i2c_master_handle;
+    ctx->frequency = frequency;
 
-    (void)i2c_master_handle;
-    *i2c_bus_handle = i2c_bus_create(i2c_master_cfg->i2c_port, &i2c_bus_cfg);
-    if (*i2c_bus_handle == NULL) {
-        esp_board_periph_unref_handle(peripheral_name);
-        *peripheral_ref_held = false;
-        return ESP_FAIL;
-    }
     return ESP_OK;
 }
 
@@ -206,6 +185,7 @@ static esp_err_t lua_imu_create_handle(const lua_imu_resolved_cfg_t *cfg,
         }
     }
 
+    *out_handle = handle;
     snprintf(handle->peripheral_name, sizeof(handle->peripheral_name), "%s", cfg->peripheral_name);
     handle->int_gpio_num = (gpio_num_t)cfg->int_gpio_num;
     handle->sdo_gpio_num = (gpio_num_t)cfg->sdo_gpio_num;
@@ -230,15 +210,14 @@ static esp_err_t lua_imu_create_handle(const lua_imu_resolved_cfg_t *cfg,
     }
 
     err = lua_imu_open_i2c_bus(cfg->peripheral_name, cfg->frequency,
-                               &handle->ctx.i2c_bus_handle, &handle->peripheral_ref_held);
+                               &handle->ctx, &handle->peripheral_ref_held);
     if (err != ESP_OK) {
         goto cleanup;
     }
 
     err = lua_imu_backend.probe(&handle->ctx, (uint8_t)cfg->i2c_addr);
     if (err != ESP_OK) {
-        lua_imu_destroy_handle(handle);
-        return err;
+        goto cleanup;
     }
 
     handle->sensor_initialized = true;
@@ -255,48 +234,50 @@ static esp_err_t lua_imu_create_handle(const lua_imu_resolved_cfg_t *cfg,
     return ESP_OK;
 
 cleanup:
-    if (handle->ctx.state != NULL) {
-        free(handle->ctx.state);
-    }
-    free(handle);
+    /* The tracked object owns partially initialized hardware for retry. */
     return err;
 }
 
-static void lua_imu_destroy_handle(lua_imu_handle_t *handle)
+static esp_err_t lua_imu_destroy_handle(lua_imu_handle_t *handle)
 {
-    if (handle == NULL) {
-        return;
+    if (!handle) return ESP_OK;
+    esp_err_t err;
+    if (lua_imu_backend.destroy) {
+        err = lua_imu_backend.destroy(&handle->ctx);
+        if (err != ESP_OK) return err;
     }
-    if (lua_imu_backend.destroy != NULL) {
-        lua_imu_backend.destroy(&handle->ctx);
-    }
-    if (handle->ctx.i2c_dev_handle != NULL) {
-        i2c_bus_device_delete(&handle->ctx.i2c_dev_handle);
+    if (handle->ctx.i2c_dev_handle) {
+        err = i2c_master_bus_rm_device(handle->ctx.i2c_dev_handle);
+        if (err != ESP_OK) return err;
         handle->ctx.i2c_dev_handle = NULL;
     }
-    if (handle->ctx.i2c_bus_handle != NULL) {
-        if (handle->peripheral_ref_held) {
-            /* The board manager owns the shared master bus lifecycle. */
-            handle->ctx.i2c_bus_handle = NULL;
-        } else {
-            i2c_bus_delete(&handle->ctx.i2c_bus_handle);
-        }
-    }
     if (handle->int_gpio_num >= 0) {
-        gpio_reset_pin(handle->int_gpio_num);
+        err = gpio_reset_pin(handle->int_gpio_num);
+        if (err != ESP_OK) return err;
     }
     if (handle->sdo_gpio_num >= 0) {
-        gpio_reset_pin(handle->sdo_gpio_num);
+        err = gpio_reset_pin(handle->sdo_gpio_num);
+        if (err != ESP_OK) return err;
     }
-    if (handle->peripheral_ref_held && handle->peripheral_name[0] != '\0') {
-        esp_board_periph_unref_handle(handle->peripheral_name);
+    if (handle->peripheral_ref_held) {
+        err = esp_board_periph_unref_handle(handle->peripheral_name);
+        if (err != ESP_OK) return err;
+        handle->peripheral_ref_held = false;
     }
-    if (handle->ctx.state != NULL) {
-        free(handle->ctx.state);
-        handle->ctx.state = NULL;
-    }
-    handle->sensor_initialized = false;
+    free(handle->ctx.state);
     free(handle);
+    return ESP_OK;
+}
+
+static esp_err_t lua_imu_release(lua_imu_ud_t *ud)
+{
+    if (ud->handle) {
+        ud->handle->sensor_initialized = false;
+        esp_err_t err = lua_imu_destroy_handle(ud->handle);
+        if (err != ESP_OK) return err;
+        ud->handle = NULL;
+    }
+    return cap_lua_hw_release(&ud->lease);
 }
 
 static lua_imu_ud_t *lua_imu_get_ud(lua_State *L, int idx)
@@ -321,12 +302,8 @@ static void lua_imu_push_axes_table(lua_State *L, int x, int y, int z)
 
 static int lua_imu_close_impl(lua_State *L, lua_imu_ud_t *ud)
 {
-    (void)L;
-    if (ud->handle != NULL) {
-        lua_imu_destroy_handle(ud->handle);
-        ud->handle = NULL;
-    }
-    ud->device_name[0] = '\0';
+    esp_err_t err = lua_imu_release(ud);
+    if (err != ESP_OK) return luaL_error(L, "imu close failed: %s", esp_err_to_name(err));
     return 0;
 }
 
@@ -430,7 +407,12 @@ static esp_err_t lua_imu_resolve_board_cfg(const char *device_name,
                          (unsigned)sizeof(lua_imu_board_cfg_t));
                 return ESP_ERR_INVALID_SIZE;
             }
-            *out = (const lua_imu_board_cfg_t *)desc->cfg;
+            const lua_imu_board_cfg_t *config = desc->cfg;
+            if (config->peripheral_count != 1 || config->int_gpio_num < -1 || config->sdo_gpio_num < -1) {
+                ESP_LOGE(TAG, "Board IMU '%s' layout invalid; include sdo_gpio_num before peripheral_count", device_name);
+                return ESP_ERR_INVALID_SIZE;
+            }
+            *out = config;
             return ESP_OK;
         }
         desc = desc->next;
@@ -463,10 +445,7 @@ static esp_err_t lua_imu_load_board_defaults(const char *device_name,
         out->frequency = board->frequency;
         out->has_frequency = true;
     }
-    /* The size check above guarantees `board` has every field listed in our
-     * mirror struct. Only adopt the GPIO when explicitly non-negative; YAML
-     * uses `-1` to mean "no strap wired", and any value >= 0 is taken as a
-     * real GPIO number. */
+    /* Adopt only explicitly configured pins after validating the board layout. */
     if (board->int_gpio_num >= 0) {
         out->int_gpio_num = board->int_gpio_num;
         out->has_int_gpio = true;
@@ -478,50 +457,16 @@ static esp_err_t lua_imu_load_board_defaults(const char *device_name,
     return ESP_OK;
 }
 
-static void lua_imu_apply_lua_overrides(lua_State *L, int opts_idx,
-                                        lua_imu_resolved_cfg_t *cfg)
+static void lua_imu_apply_lua_overrides(lua_State *L, int opts_idx, lua_imu_resolved_cfg_t *cfg)
 {
-    if (opts_idx == 0 || lua_type(L, opts_idx) != LUA_TTABLE) {
-        return;
+    (void)cfg;
+    if (!opts_idx) return;
+    lua_pushnil(L);
+    while (lua_next(L, opts_idx)) {
+        const char *key = lua_tostring(L, -2);
+        if (!key || strcmp(key, "device") != 0) luaL_error(L, "imu hardware overrides are not supported; use the board configuration");
+        lua_pop(L, 1);
     }
-
-    lua_getfield(L, opts_idx, "peripheral");
-    if (lua_isstring(L, -1)) {
-        snprintf(cfg->peripheral_name, sizeof(cfg->peripheral_name), "%s", lua_tostring(L, -1));
-        cfg->has_peripheral = true;
-    }
-    lua_pop(L, 1);
-
-    lua_getfield(L, opts_idx, "i2c_addr");
-    if (lua_isnumber(L, -1)) {
-        cfg->i2c_addr = (int)lua_tointeger(L, -1);
-        cfg->has_i2c_addr = true;
-    }
-    lua_pop(L, 1);
-
-    lua_getfield(L, opts_idx, "frequency");
-    if (lua_isnumber(L, -1)) {
-        cfg->frequency = (int)lua_tointeger(L, -1);
-        cfg->has_frequency = true;
-    }
-    lua_pop(L, 1);
-
-    lua_getfield(L, opts_idx, "int_gpio");
-    if (lua_isnumber(L, -1)) {
-        cfg->int_gpio_num = (int)lua_tointeger(L, -1);
-        cfg->has_int_gpio = true;
-    }
-    lua_pop(L, 1);
-
-    /* sdo_gpio: opt-in only. Passing a negative number, or omitting the
-     * key entirely, leaves sdo_gpio_num at -1 and the main module will
-     * not touch any GPIO. Do NOT default to 0 here. */
-    lua_getfield(L, opts_idx, "sdo_gpio");
-    if (lua_isnumber(L, -1)) {
-        cfg->sdo_gpio_num = (int)lua_tointeger(L, -1);
-        cfg->has_sdo_gpio = true;
-    }
-    lua_pop(L, 1);
 }
 
 static int lua_imu_new(lua_State *L)
@@ -605,20 +550,50 @@ static int lua_imu_new(lua_State *L)
                           lua_imu_backend.chip_name, cfg.i2c_addr);
     }
 
-    lua_imu_handle_t *handle = NULL;
-    err = lua_imu_create_handle(&cfg, &handle);
-    if (err != ESP_OK || handle == NULL) {
-        return luaL_error(L, "imu.new failed: %s",
-                          esp_err_to_name(err != ESP_OK ? err : ESP_FAIL));
-    }
-
-    lua_imu_ud_t *ud = (lua_imu_ud_t *)lua_newuserdata(L, sizeof(*ud));
+    lua_imu_ud_t *ud = lua_newuserdata(L, sizeof(*ud));
     memset(ud, 0, sizeof(*ud));
-    ud->handle = handle;
-    snprintf(ud->device_name, sizeof(ud->device_name), "%s", opened_device_name);
-
     luaL_getmetatable(L, LUA_IMU_METATABLE);
     lua_setmetatable(L, -2);
+    i2c_master_bus_config_t *bus_cfg = NULL;
+    err = esp_board_periph_get_config(cfg.peripheral_name, (void **)&bus_cfg);
+    if (err != ESP_OK || !bus_cfg) return luaL_error(L, "imu board bus config missing");
+    if ((cfg.int_gpio_num >= 0 && !GPIO_IS_VALID_GPIO(cfg.int_gpio_num)) ||
+        (cfg.sdo_gpio_num >= 0 && !GPIO_IS_VALID_OUTPUT_GPIO(cfg.sdo_gpio_num)) ||
+        cfg.int_gpio_num == bus_cfg->sda_io_num || cfg.int_gpio_num == bus_cfg->scl_io_num ||
+        cfg.sdo_gpio_num == bus_cfg->sda_io_num || cfg.sdo_gpio_num == bus_cfg->scl_io_num ||
+        (cfg.sdo_gpio_num >= 0 && cfg.sdo_gpio_num == cfg.int_gpio_num)) {
+        ESP_LOGE(TAG, "Invalid IMU pins: INT=%d SDO=%d SDA=%d SCL=%d", cfg.int_gpio_num, cfg.sdo_gpio_num,
+                 bus_cfg->sda_io_num, bus_cfg->scl_io_num);
+        return luaL_error(L, "imu pin configuration overlaps its bus or is invalid");
+    }
+    if (bus_cfg->i2c_port < 0 || bus_cfg->i2c_port >= SOC_I2C_NUM) return luaL_error(L, "imu board I2C port is invalid");
+    char key_buf[LUA_IMU_MAX_RESOURCES][LUA_IMU_RESOURCE_KEY_SIZE];
+    const char *keys[LUA_IMU_MAX_RESOURCES];
+    size_t count = 0;
+    snprintf(key_buf[count], sizeof(key_buf[count]), "bus:i2c%d", bus_cfg->i2c_port);
+    keys[count] = key_buf[count];
+    count++;
+    snprintf(key_buf[count], sizeof(key_buf[count]), "i2c_addr:%d:%02x", bus_cfg->i2c_port, (unsigned)cfg.i2c_addr);
+    keys[count] = key_buf[count];
+    count++;
+    if (cfg.int_gpio_num >= 0) {
+        snprintf(key_buf[count], sizeof(key_buf[count]), "gpio:%d", cfg.int_gpio_num);
+        keys[count] = key_buf[count];
+        count++;
+    }
+    if (cfg.sdo_gpio_num >= 0) {
+        snprintf(key_buf[count], sizeof(key_buf[count]), "gpio:%d", cfg.sdo_gpio_num);
+        keys[count] = key_buf[count];
+        count++;
+    }
+    err = cap_lua_hw_claim(L, &ud->lease, "lua/imu", keys, count);
+    if (err != ESP_OK) return luaL_error(L, "imu claim failed: %s", esp_err_to_name(err));
+    err = lua_imu_create_handle(&cfg, &ud->handle);
+    if (err != ESP_OK || !ud->handle) {
+        (void)lua_imu_release(ud);
+        return luaL_error(L, "imu.new failed: %s", esp_err_to_name(err != ESP_OK ? err : ESP_FAIL));
+    }
+    snprintf(ud->device_name, sizeof(ud->device_name), "%s", opened_device_name);
     return 1;
 }
 

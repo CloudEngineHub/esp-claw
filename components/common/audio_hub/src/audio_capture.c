@@ -24,7 +24,6 @@
 #include "esp_err.h"
 #include "esp_log.h"
 
-#include "claw_hw_registry.h"
 #include "dev_audio_codec.h"
 #include "audio_memory.h"
 
@@ -32,7 +31,6 @@ static const char *TAG = "audio_capture";
 
 #define AUDIO_CAPTURE_TASK_PRIO         10
 #define AUDIO_CAPTURE_TASK_STACK        4096
-#define AUDIO_CAPTURE_OWNER_TAG         "capture/system"
 #define AUDIO_CAPTURE_SUB_ROLE_COUNT    2
 #define AUDIO_CAPTURE_IDLE_DELAY_MS     20
 #define AUDIO_CAPTURE_IO_SLICE_MS       20
@@ -90,8 +88,6 @@ struct audio_capture_t {
     audio_capture_config_t     cfg;
     dev_audio_codec_handles_t *codec_handles;
     esp_codec_dev_handle_t     codec_dev;
-    claw_hw_lease_handle_t     dev_lease;
-    char                       device_key[48];
 
     size_t                     bytes_per_frame;
     uint32_t                   samples_per_frame;
@@ -357,10 +353,6 @@ static void capture_free_all(struct audio_capture_t *h)
         esp_codec_dev_close(h->codec_dev);
         h->codec_open = false;
     }
-    if (h->dev_lease) {
-        claw_hw_release(h->dev_lease);
-        h->dev_lease = NULL;
-    }
     if (h->mtx) {
         vSemaphoreDelete(h->mtx);
         h->mtx = NULL;
@@ -411,20 +403,6 @@ esp_err_t audio_capture_start(const audio_capture_config_t *config,
         ESP_LOGE(TAG, "board device '%s' has no codec_dev handle", AUDIO_CAPTURE_CODEC_DEVICE_NAME);
         capture_free_all(h);
         return ESP_ERR_INVALID_STATE;
-    }
-
-    (void)claw_hw_key_device(h->device_key, sizeof(h->device_key),
-                             AUDIO_CAPTURE_CODEC_DEVICE_NAME);
-    claw_hw_claim_config_t claim = {
-        .resource  = h->device_key,
-        .owner_tag = AUDIO_CAPTURE_OWNER_TAG,
-        .mode      = CLAW_HW_MODE_EXCLUSIVE,
-    };
-    err = claw_hw_claim(&claim, &h->dev_lease);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "claim %s failed: 0x%x", h->device_key, (unsigned)err);
-        capture_free_all(h);
-        return err;
     }
 
     esp_codec_dev_sample_info_t fs = {

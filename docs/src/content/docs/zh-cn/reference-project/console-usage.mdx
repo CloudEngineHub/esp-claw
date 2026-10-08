@@ -97,6 +97,19 @@ router --last
 />
 
 
+## 硬件资源 hwmap
+
+`hwmap` 显示已注册资源及其使用者；`hwmap query <key>` 查询单项。`EXCLUSIVE` 最多允许一个凭证，`SHARED` 允许多个凭证；`USERS` 为当前使用数，`CLAIM` 为使用凭证编号。已注册但空闲的资源显示 `(free)`，未注册的 key 返回错误。
+
+```sh
+hwmap
+hwmap query gpio:1
+hwmap query bus:i2c0
+hwmap query device:display_lcd
+```
+
+启动时注册资源目录，Board Manager 实际初始化驱动时才申请占用，驱动销毁成功后释放。Flash、PSRAM、控制台等系统资源不在注册表保护范围内。共享入口只允许复用现有硬件对象，不保证任意并发操作都安全。
+
 ## 其它已注册的命令
 
 根据编译配置，`edge_agent` 还可注册 `lua`、`scheduler`、`router`、`skill`、`hwmap` 和 `wifi`。

@@ -65,6 +65,16 @@ Pure Lua modules may provide only managed resources such as `lib/`, `test/`, and
     In `edge_agent`, every module is controlled by Kconfig. When the firmware is not built with a module's component, Lua scripts cannot use that module.
 </Aside>
 
+## Hardware ownership and exit cleanup
+
+Hardware objects claim resources through a shared registry: opening fails when a resource is unregistered or already held exclusively. Board code and providers register resources; scripts open, use, and close objects. `i2c.new(...)` creates a bus, while `i2c.borrow(0)` borrows the initialized board bus. Device addresses remain exclusive, so borrowing cannot override board devices.
+
+The constructors `lcd.new(...)`, `environmental_sensor.new(...)`, `magnetometer.new(...)`, and `sci.new(...)` currently return an explicit error because their resource ownership integration is incomplete, even when their components are enabled. This does not affect access to the built-in screen through `display.open()`.
+
+On script exit, hardware stops before its claims are released. If hardware cleanup fails, the runtime retains the Lua state and claims, then retries when a later job starts. This prevents other jobs from taking over hardware that is still active. Use the Console command `hwmap` to inspect ownership.
+
+The runtime keeps only `traceback` and `getinfo` in the `debug` library; interfaces that modify the registry, metatables, closures, or execution hooks are unavailable.
+
 ## Registration flow
 
 Each `lua_module_*` / `lua_driver_*` ships exactly one registrar named `lua_module_<name>_register()` or `lua_driver_<name>_register()`:

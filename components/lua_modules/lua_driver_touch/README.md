@@ -6,15 +6,15 @@ When a request mentions `touch`, `touch channels`, or `capacitive sensor`, use t
 ## How to call
 - Import it with `local touch = require("touch")`
 - Open the device with one of:
-  - `local keys = touch.new({ gpios = { 2, 3, 4 } })` — provide GPIOs directly
-  - `local keys = touch.new("touch_inputs", { gpios = { 2, 3, 4 }, threshold_milli = 20 })` — choose a name and threshold
+  - `local keys = touch.new({ gpios = { 4, 5 } })` — provide GPIOs directly
+  - `local keys = touch.new("touch_inputs", { gpios = { 4, 5 }, threshold_milli = 20 })` — choose a name and threshold
 - Call `local sample = keys:read()` to get all channel states
 - Call `local pressed = keys:is_pressed(index)` to check one channel (1-based index)
 - Call `keys:name()` to get the device name string
 - Call `keys:close()` when done
 
 ## Options table
-`gpios` is required. Other fields are optional.
+`gpios` is optional when the board declares `touch_keys`; otherwise it is required. `touch.new()` uses the board pins and threshold. Every constructor atomically claims its actual GPIO list, whether it uses board defaults or explicit pins. Board `custom`/`init_skip` configuration alone does not reserve the pins; GPIO users and overlapping touch objects conflict before hardware initialization.
 
 | Field             | Type    | Meaning                                              |
 |-------------------|---------|------------------------------------------------------|
@@ -41,10 +41,12 @@ When a request mentions `touch`, `touch channels`, or `capacitive sensor`, use t
 ```lua
 local touch = require("touch")
 
-local keys = touch.new({ gpios = { 2, 3, 4 } })
+local keys = touch.new({ gpios = { 4, 5 } })
 local sample = keys:read()
 for _, key in ipairs(sample.keys) do
     print(key.index, key.gpio, key.channel, key.smooth)
 end
 keys:close()
 ```
+
+GPIO4/5 in this example must be free on the target board. Hardware GPIOs are claimed before configuration. Occupied or unavailable resources raise an error; `close()` releases ownership only after hardware cleanup succeeds. Failed cleanup retains ownership for retry.

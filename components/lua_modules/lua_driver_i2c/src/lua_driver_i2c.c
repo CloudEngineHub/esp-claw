@@ -6,6 +6,7 @@
 #include "lua_driver_i2c.h"
 
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "cap_lua.h"
@@ -13,6 +14,9 @@
 #include "esp_err.h"
 #include "i2c_bus.h"
 #include "lauxlib.h"
+#include "cap_lua_hw.h"
+#include "driver/gpio.h"
+#include "soc/soc_caps.h"
 
 #define LUA_DRIVER_I2C_BUS_METATABLE    "i2c.bus"
 #define LUA_DRIVER_I2C_DEVICE_METATABLE "i2c.device"
@@ -21,22 +25,28 @@
 #define LUA_DRIVER_I2C_RW_MAX_LEN       1024
 
 typedef struct {
-    i2c_bus_handle_t bus;
+    i2c_master_bus_handle_t bus;
     int port;
     bool external_owned;
+    unsigned devices;
+    uint32_t frequency;
+    cap_lua_hw_lease_t lease;
+    bool closing;
 } lua_driver_i2c_bus_ud_t;
 
 typedef struct {
-    i2c_bus_device_handle_t dev;
+    i2c_master_dev_handle_t dev;
     uint8_t addr;
-    int bus_ref;
+    lua_driver_i2c_bus_ud_t *parent;
+    cap_lua_hw_lease_t lease;
+    bool closing;
 } lua_driver_i2c_device_ud_t;
 
 static lua_driver_i2c_bus_ud_t *lua_driver_i2c_bus_get_ud(lua_State *L, int idx)
 {
     lua_driver_i2c_bus_ud_t *ud = (lua_driver_i2c_bus_ud_t *)luaL_checkudata(
         L, idx, LUA_DRIVER_I2C_BUS_METATABLE);
-    if (!ud || !ud->bus) {
+    if (!ud || !ud->bus || ud->closing) {
         luaL_error(L, "i2c bus: invalid or closed handle");
     }
     return ud;
@@ -46,7 +56,7 @@ static lua_driver_i2c_device_ud_t *lua_driver_i2c_device_get_ud(lua_State *L, in
 {
     lua_driver_i2c_device_ud_t *ud = (lua_driver_i2c_device_ud_t *)luaL_checkudata(
         L, idx, LUA_DRIVER_I2C_DEVICE_METATABLE);
-    if (!ud || !ud->dev) {
+    if (!ud || !ud->dev || ud->closing) {
         luaL_error(L, "i2c device: invalid or closed handle");
     }
     return ud;
@@ -66,21 +76,39 @@ static uint8_t lua_driver_i2c_mem_addr(lua_State *L, int idx)
 
 static esp_err_t lua_driver_i2c_bus_release(lua_driver_i2c_bus_ud_t *ud)
 {
-    if (ud == NULL || ud->bus == NULL) {
-        return ESP_OK;
-    }
-    if (ud->external_owned) {
+    if (!ud) return ESP_OK;
+    if (ud->devices) return ESP_ERR_INVALID_STATE;
+    ud->closing = true;
+    if (ud->bus && !ud->external_owned) {
+        esp_err_t err = i2c_del_master_bus(ud->bus);
+        if (err != ESP_OK) return err;
         ud->bus = NULL;
-        return ESP_OK;
     }
-    return i2c_bus_delete(&ud->bus);
+    ud->bus = NULL;
+    return cap_lua_hw_release(&ud->lease);
+}
+
+static esp_err_t lua_driver_i2c_device_release(lua_driver_i2c_device_ud_t *ud)
+{
+    ud->closing = true;
+    if (ud->dev) {
+        esp_err_t err = i2c_master_bus_rm_device(ud->dev);
+        if (err != ESP_OK) return err;
+        ud->dev = NULL;
+    }
+    esp_err_t err = cap_lua_hw_release(&ud->lease);
+    if (err == ESP_OK && ud->parent) {
+        ud->parent->devices--;
+        ud->parent = NULL;
+    }
+    return err;
 }
 
 static int lua_driver_i2c_bus_gc(lua_State *L)
 {
     lua_driver_i2c_bus_ud_t *ud = (lua_driver_i2c_bus_ud_t *)luaL_testudata(
         L, 1, LUA_DRIVER_I2C_BUS_METATABLE);
-    if (ud && ud->bus) {
+    if (ud) {
         (void)lua_driver_i2c_bus_release(ud);
     }
     return 0;
@@ -88,14 +116,9 @@ static int lua_driver_i2c_bus_gc(lua_State *L)
 
 static int lua_driver_i2c_bus_close(lua_State *L)
 {
-    lua_driver_i2c_bus_ud_t *ud = (lua_driver_i2c_bus_ud_t *)luaL_checkudata(
-        L, 1, LUA_DRIVER_I2C_BUS_METATABLE);
-    if (ud->bus) {
-        esp_err_t err = lua_driver_i2c_bus_release(ud);
-        if (err != ESP_OK) {
-            return luaL_error(L, "i2c bus close failed: %s", esp_err_to_name(err));
-        }
-    }
+    lua_driver_i2c_bus_ud_t *ud = luaL_checkudata(L, 1, LUA_DRIVER_I2C_BUS_METATABLE);
+    esp_err_t err = lua_driver_i2c_bus_release(ud);
+    if (err != ESP_OK) return luaL_error(L, "i2c bus close failed: %s", esp_err_to_name(err));
     return 0;
 }
 
@@ -103,7 +126,10 @@ static int lua_driver_i2c_bus_scan(lua_State *L)
 {
     lua_driver_i2c_bus_ud_t *ud = lua_driver_i2c_bus_get_ud(L, 1);
     uint8_t buf[LUA_DRIVER_I2C_SCAN_MAX];
-    uint8_t count = i2c_bus_scan(ud->bus, buf, LUA_DRIVER_I2C_SCAN_MAX);
+    uint8_t count = 0;
+    for (int addr = 1; addr < 127; ++addr) {
+        if (i2c_master_probe(ud->bus, addr, 50) == ESP_OK) buf[count++] = addr;
+    }
     lua_createtable(L, count, 0);
     for (uint8_t i = 0; i < count; i++) {
         lua_pushinteger(L, buf[i]);
@@ -122,56 +148,42 @@ static int lua_driver_i2c_bus_device(lua_State *L)
         return luaL_error(L, "i2c address must be in range 0-127");
     }
 
-    i2c_bus_device_handle_t dev = i2c_bus_device_create(ud->bus, (uint8_t)addr, clk_speed);
-    if (!dev) {
-        return luaL_error(L, "i2c device create failed");
-    }
-
-    lua_driver_i2c_device_ud_t *dud = (lua_driver_i2c_device_ud_t *)lua_newuserdata(
-        L, sizeof(*dud));
-    dud->dev = dev;
-    dud->addr = (uint8_t)addr;
-    dud->bus_ref = LUA_NOREF;
+    lua_driver_i2c_device_ud_t *dud = lua_newuserdata(L, sizeof(*dud));
+    *dud = (lua_driver_i2c_device_ud_t) { .addr = (uint8_t)addr };
     luaL_getmetatable(L, LUA_DRIVER_I2C_DEVICE_METATABLE);
     lua_setmetatable(L, -2);
-
+    char key[CLAW_HW_KEY_SIZE];
+    snprintf(key, sizeof(key), "i2c_addr:%d:%02x", ud->port, (unsigned)addr);
+    const char *keys[] = { key };
+    esp_err_t err = cap_lua_hw_claim(L, &dud->lease, "lua/i2c-device", keys, 1);
+    if (err != ESP_OK) return luaL_error(L, "i2c address claim failed: %s", esp_err_to_name(err));
+    /* Keep the bus alive while this device uses it. */
     lua_pushvalue(L, 1);
-    dud->bus_ref = luaL_ref(L, LUA_REGISTRYINDEX);
-
-    return 1;
-}
-
-static int lua_driver_i2c_device_gc(lua_State *L)
-{
-    lua_driver_i2c_device_ud_t *ud = (lua_driver_i2c_device_ud_t *)luaL_testudata(
-        L, 1, LUA_DRIVER_I2C_DEVICE_METATABLE);
-    if (ud) {
-        if (ud->dev) {
-            i2c_bus_device_delete(&ud->dev);
-        }
-        if (ud->bus_ref != LUA_NOREF) {
-            luaL_unref(L, LUA_REGISTRYINDEX, ud->bus_ref);
-            ud->bus_ref = LUA_NOREF;
-        }
+    lua_setuservalue(L, -2);
+    dud->parent = ud;
+    ud->devices++;
+    i2c_device_config_t cfg = { .dev_addr_length = I2C_ADDR_BIT_LEN_7, .device_address = addr, .scl_speed_hz = clk_speed ? clk_speed : ud->frequency };
+    err = i2c_master_bus_add_device(ud->bus, &cfg, &dud->dev);
+    if (err != ESP_OK) {
+        (void)lua_driver_i2c_device_release(dud);
+        return luaL_error(L, "i2c device create failed");
     }
-    return 0;
+    return 1;
 }
 
 static int lua_driver_i2c_device_close(lua_State *L)
 {
-    lua_driver_i2c_device_ud_t *ud = (lua_driver_i2c_device_ud_t *)luaL_checkudata(
-        L, 1, LUA_DRIVER_I2C_DEVICE_METATABLE);
-    if (ud->dev) {
-        esp_err_t err = i2c_bus_device_delete(&ud->dev);
-        if (err != ESP_OK) {
-            return luaL_error(L, "i2c device close failed: %s", esp_err_to_name(err));
-        }
-    }
-    if (ud->bus_ref != LUA_NOREF) {
-        luaL_unref(L, LUA_REGISTRYINDEX, ud->bus_ref);
-        ud->bus_ref = LUA_NOREF;
-    }
+    lua_driver_i2c_device_ud_t *ud = luaL_checkudata(L, 1, LUA_DRIVER_I2C_DEVICE_METATABLE);
+    esp_err_t err = lua_driver_i2c_device_release(ud);
+    if (err != ESP_OK) return luaL_error(L, "i2c device close failed: %s", esp_err_to_name(err));
+    lua_pushnil(L);
+    lua_setuservalue(L, 1);
     return 0;
+}
+
+static int lua_driver_i2c_device_gc(lua_State *L)
+{
+    return lua_driver_i2c_device_close(L);
 }
 
 static int lua_driver_i2c_device_address(lua_State *L)
@@ -181,12 +193,28 @@ static int lua_driver_i2c_device_address(lua_State *L)
     return 1;
 }
 
+static esp_err_t lua_i2c_read(i2c_master_dev_handle_t dev, uint8_t address, size_t size, uint8_t *data)
+{
+    if (address == NULL_I2C_MEM_ADDR) return i2c_master_receive(dev, data, size, 1000);
+    return i2c_master_transmit_receive(dev, &address, 1, data, size, 1000);
+}
+
+static esp_err_t lua_i2c_write(i2c_master_dev_handle_t dev, uint8_t address, size_t size, const uint8_t *data)
+{
+    if (address == NULL_I2C_MEM_ADDR) return i2c_master_transmit(dev, data, size, 1000);
+    i2c_master_transmit_multi_buffer_info_t buffers[] = {
+        { .write_buffer = &address, .buffer_size = 1 },
+        { .write_buffer = (uint8_t *)data, .buffer_size = size },
+    };
+    return i2c_master_multi_buffer_transmit(dev, buffers, 2, 1000);
+}
+
 static int lua_driver_i2c_device_read_byte(lua_State *L)
 {
     lua_driver_i2c_device_ud_t *ud = lua_driver_i2c_device_get_ud(L, 1);
     uint8_t mem_addr = lua_driver_i2c_mem_addr(L, 2);
     uint8_t data = 0;
-    esp_err_t err = i2c_bus_read_byte(ud->dev, mem_addr, &data);
+    esp_err_t err = lua_i2c_read(ud->dev, mem_addr, 1, &data);
     if (err != ESP_OK) {
         return luaL_error(L, "i2c read_byte failed: %s", esp_err_to_name(err));
     }
@@ -206,7 +234,7 @@ static int lua_driver_i2c_device_read(lua_State *L)
 
     luaL_Buffer b;
     uint8_t *buf = (uint8_t *)luaL_buffinitsize(L, &b, (size_t)len);
-    esp_err_t err = i2c_bus_read_bytes(ud->dev, mem_addr, (size_t)len, buf);
+    esp_err_t err = lua_i2c_read(ud->dev, mem_addr, (size_t)len, buf);
     if (err != ESP_OK) {
         return luaL_error(L, "i2c read failed: %s", esp_err_to_name(err));
     }
@@ -224,7 +252,8 @@ static int lua_driver_i2c_device_write_byte(lua_State *L)
         return luaL_error(L, "i2c write_byte value must be 0-255");
     }
 
-    esp_err_t err = i2c_bus_write_byte(ud->dev, mem_addr, (uint8_t)value);
+    uint8_t data = value;
+    esp_err_t err = lua_i2c_write(ud->dev, mem_addr, 1, &data);
     if (err != ESP_OK) {
         return luaL_error(L, "i2c write_byte failed: %s", esp_err_to_name(err));
     }
@@ -272,7 +301,7 @@ static int lua_driver_i2c_device_write(lua_State *L)
         return luaL_error(L, "i2c write length must be 1-%d", LUA_DRIVER_I2C_RW_MAX_LEN);
     }
 
-    esp_err_t err = i2c_bus_write_bytes(ud->dev, mem_addr, data_len, data);
+    esp_err_t err = lua_i2c_write(ud->dev, mem_addr, data_len, data);
     if (err != ESP_OK) {
         return luaL_error(L, "i2c write failed: %s", esp_err_to_name(err));
     }
@@ -286,34 +315,62 @@ static int lua_driver_i2c_new(lua_State *L)
     lua_Integer scl = luaL_checkinteger(L, 3);
     lua_Integer freq = luaL_optinteger(L, 4, LUA_DRIVER_I2C_DEFAULT_FREQ_HZ);
 
-    if (freq <= 0) {
+    if (freq <= 0 || (uint64_t)freq > UINT32_MAX) {
         return luaL_error(L, "i2c freq must be positive");
     }
 
-    i2c_config_t conf = {
-        .mode = I2C_MODE_MASTER,
-        .sda_io_num = (int)sda,
-        .scl_io_num = (int)scl,
-        .sda_pullup_en = true,
-        .scl_pullup_en = true,
-        .master.clk_speed = (uint32_t)freq,
+    i2c_master_bus_config_t conf = {
+        .i2c_port = (int)port, .sda_io_num = (int)sda, .scl_io_num = (int)scl,
+        .clk_source = I2C_CLK_SRC_DEFAULT, .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true,
     };
 
-    i2c_master_bus_handle_t existing_bus = NULL;
-    bool external_owned = i2c_master_get_bus_handle((i2c_port_t)port, &existing_bus) == ESP_OK;
-
-    i2c_bus_handle_t bus = i2c_bus_create((i2c_port_t)port, &conf);
-    if (!bus) {
-        return luaL_error(L, "i2c bus create failed on port %d", (int)port);
-    }
-
-    lua_driver_i2c_bus_ud_t *ud = (lua_driver_i2c_bus_ud_t *)lua_newuserdata(
-        L, sizeof(*ud));
-    ud->bus = bus;
-    ud->port = (int)port;
-    ud->external_owned = external_owned;
+    luaL_argcheck(L, port >= 0 && port < SOC_I2C_NUM, 1, "invalid I2C port");
+    luaL_argcheck(L, sda >= 0 && sda < SOC_GPIO_PIN_COUNT && GPIO_IS_VALID_OUTPUT_GPIO(sda), 2, "invalid SDA GPIO");
+    luaL_argcheck(L, scl >= 0 && scl < SOC_GPIO_PIN_COUNT && GPIO_IS_VALID_OUTPUT_GPIO(scl), 3, "invalid SCL GPIO");
+    lua_driver_i2c_bus_ud_t *ud = lua_newuserdata(L, sizeof(*ud));
+    *ud = (lua_driver_i2c_bus_ud_t) { .port = (int)port, .frequency = (uint32_t)freq };
     luaL_getmetatable(L, LUA_DRIVER_I2C_BUS_METATABLE);
     lua_setmetatable(L, -2);
+    char keys_buf[3][24];
+    snprintf(keys_buf[0], sizeof(keys_buf[0]), "i2c_bus:%d", (int)port);
+    snprintf(keys_buf[1], sizeof(keys_buf[1]), "gpio:%d", (int)sda);
+    snprintf(keys_buf[2], sizeof(keys_buf[2]), "gpio:%d", (int)scl);
+    const char *keys[] = { keys_buf[0], keys_buf[1], keys_buf[2] };
+    esp_err_t err = cap_lua_hw_claim(L, &ud->lease, "lua/i2c-bus", keys, 3);
+    if (err != ESP_OK) return luaL_error(L, "i2c bus claim failed: %s", esp_err_to_name(err));
+    i2c_master_bus_handle_t existing = NULL;
+    if (i2c_master_get_bus_handle((i2c_port_t)port, &existing) == ESP_OK) {
+        (void)lua_driver_i2c_bus_release(ud);
+        return luaL_error(L, "I2C bus already initialized; use i2c.borrow");
+    }
+    err = i2c_new_master_bus(&conf, &ud->bus);
+    if (err != ESP_OK) {
+        (void)lua_driver_i2c_bus_release(ud);
+        return luaL_error(L, "i2c bus create failed on port %d", (int)port);
+    }
+    return 1;
+}
+
+static int lua_driver_i2c_borrow(lua_State *L)
+{
+    int port = luaL_checkinteger(L, 1);
+    luaL_argcheck(L, port >= 0 && port < SOC_I2C_NUM, 1, "invalid I2C port");
+    lua_driver_i2c_bus_ud_t *ud = lua_newuserdata(L, sizeof(*ud));
+    *ud = (lua_driver_i2c_bus_ud_t) { .port = port, .external_owned = true, .frequency = LUA_DRIVER_I2C_DEFAULT_FREQ_HZ };
+    luaL_getmetatable(L, LUA_DRIVER_I2C_BUS_METATABLE);
+    lua_setmetatable(L, -2);
+    char key[CLAW_HW_KEY_SIZE];
+    snprintf(key, sizeof(key), "bus:i2c%d", port);
+    const char *keys[] = { key };
+    esp_err_t err = cap_lua_hw_claim(L, &ud->lease, "lua/i2c-borrow", keys, 1);
+    if (err != ESP_OK) return luaL_error(L, "i2c borrow failed: %s", esp_err_to_name(err));
+    /* Borrow the provider's driver without reconfiguring its pins. */
+    err = i2c_master_get_bus_handle(port, &ud->bus);
+    if (err != ESP_OK || !ud->bus) {
+        (void)lua_driver_i2c_bus_release(ud);
+        return luaL_error(L, "I2C provider has no initialized bus");
+    }
     return 1;
 }
 
@@ -354,6 +411,8 @@ int luaopen_i2c(lua_State *L)
     lua_pop(L, 1);
 
     lua_newtable(L);
+    lua_pushcfunction(L, lua_driver_i2c_borrow);
+    lua_setfield(L, -2, "borrow");
     lua_pushcfunction(L, lua_driver_i2c_new);
     lua_setfield(L, -2, "new");
     return 1;

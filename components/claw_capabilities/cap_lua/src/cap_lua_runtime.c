@@ -13,7 +13,7 @@
 #include <sys/stat.h>
 
 #include "cJSON.h"
-#include "claw_hw_registry.h"
+#include "cap_lua_hw.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -59,16 +59,27 @@ typedef struct {
 
 static cap_lua_owner_tag_slot_t s_owner_tag_slots[CAP_LUA_ASYNC_MAX_CONCURRENT];
 static SemaphoreHandle_t s_owner_tag_lock;
+static portMUX_TYPE s_owner_tag_init_lock = portMUX_INITIALIZER_UNLOCKED;
 
 /* Starts at 1 so job 0 is never a valid id. */
 static atomic_uint s_owner_tag_next_id = 1;
 
 static esp_err_t cap_lua_ensure_owner_tag_lock(void)
 {
+    portENTER_CRITICAL(&s_owner_tag_init_lock);
+    bool ready = s_owner_tag_lock != NULL;
+    portEXIT_CRITICAL(&s_owner_tag_init_lock);
+    if (ready) return ESP_OK;
+    SemaphoreHandle_t candidate = xSemaphoreCreateMutex();
+    if (!candidate) return ESP_ERR_NO_MEM;
+    portENTER_CRITICAL(&s_owner_tag_init_lock);
     if (!s_owner_tag_lock) {
-        s_owner_tag_lock = xSemaphoreCreateMutex();
+        s_owner_tag_lock = candidate;
+        candidate = NULL;
     }
-    return s_owner_tag_lock ? ESP_OK : ESP_ERR_NO_MEM;
+    portEXIT_CRITICAL(&s_owner_tag_init_lock);
+    if (candidate) vSemaphoreDelete(candidate);
+    return ESP_OK;
 }
 
 static void cap_lua_owner_tag_register(TaskHandle_t task, const char *tag)
@@ -166,19 +177,6 @@ const char *cap_lua_current_owner_tag(void)
     return tag;
 }
 
-void cap_lua_release_job_hw_leases(const char *owner_tag)
-{
-    if (!owner_tag || !owner_tag[0]) {
-        ESP_LOGW(TAG, "release_job_hw_leases: ignoring empty owner_tag");
-        return;
-    }
-    esp_err_t err = claw_hw_release_by_tag(owner_tag);
-    if (err != ESP_OK && err != ESP_ERR_NOT_FOUND) {
-        ESP_LOGW(TAG, "claw_hw_release_by_tag(%s) returned %s",
-                 owner_tag, esp_err_to_name(err));
-    }
-}
-
 static void cap_lua_output_append(cap_lua_exec_ctx_t *ctx,
                                   const char *text,
                                   size_t len)
@@ -205,21 +203,7 @@ static void cap_lua_output_append(cap_lua_exec_ctx_t *ctx,
     }
 }
 
-/* The per-run execution context pointer lives in the lua_State's extra space
- * (lua_getextraspace / LUA_EXTRASPACE), not in a global or a LUA_REGISTRYINDEX
- * entry. This raw memory block is not reachable from Lua at all: not through
- * globals, and -- unlike the registry -- not through debug.getregistry()
- * either (luaL_openlibs opens the debug library, which legitimate scripts rely
- * on for debug.traceback, so the registry cannot be treated as script-private).
- * Keeping the pointer here means a running script can neither read it, nil it,
- * nor overwrite it with a script-controlled userdata. That matters because the
- * instruction-count hook below dereferences this pointer as a
- * cap_lua_exec_ctx_t*; a script-supplied value would be an out-of-bounds read
- * (crash) and a route to disable the timeout/stop.
- *
- * LUA_EXTRASPACE defaults to sizeof(void *), exactly enough for one pointer,
- * and lua_newthread copies the extra space from the main thread, so coroutines
- * spawned by a script observe the same context. */
+/* Extra space keeps the context private and is inherited by Lua coroutines. */
 static void cap_lua_set_exec_ctx(lua_State *L, cap_lua_exec_ctx_t *ctx)
 {
     *(cap_lua_exec_ctx_t **)lua_getextraspace(L) = ctx;
@@ -545,8 +529,27 @@ cleanup:
     free(package_path);
 }
 
+/* Keep diagnostic helpers without exposing C userdata, registry entries, or hooks. */
+static void cap_lua_restrict_debug(lua_State *L)
+{
+    lua_getglobal(L, "debug");
+    lua_newtable(L);
+    lua_getfield(L, -2, "traceback");
+    lua_setfield(L, -2, "traceback");
+    lua_getfield(L, -2, "getinfo");
+    lua_setfield(L, -2, "getinfo");
+    lua_pushvalue(L, -1);
+    lua_setglobal(L, "debug");
+    lua_getfield(L, LUA_REGISTRYINDEX, LUA_LOADED_TABLE);
+    lua_pushvalue(L, -2);
+    lua_setfield(L, -2, "debug");
+    lua_pop(L, 3);
+}
+
 esp_err_t cap_lua_runtime_init(void)
 {
+    esp_err_t err = cap_lua_ensure_owner_tag_lock();
+    if (err != ESP_OK) return err;
     ESP_LOGI(TAG,"Lua runtime ready: registered_modules=%u", (unsigned int)cap_lua_get_module_count());
     return ESP_OK;
 }
@@ -563,16 +566,6 @@ esp_err_t cap_lua_runtime_execute_file(const char *path,
 {
     struct stat st = {0};
     lua_State *L = NULL;
-    cap_lua_exec_ctx_t ctx = {
-        .buf = output,
-        .size = output_size,
-        .deadline_us = (timeout_ms == 0)
-                       ? 0
-                       : esp_timer_get_time() + ((int64_t)timeout_ms * 1000),
-        .stop_requested = stop_requested,
-        .log_fn = log_fn,
-        .log_ctx = log_ctx,
-    };
     TaskHandle_t owning_task;
     unsigned job_seq;
     int status;
@@ -581,18 +574,33 @@ esp_err_t cap_lua_runtime_execute_file(const char *path,
     if (!output || output_size == 0) {
         return ESP_ERR_INVALID_ARG;
     }
+    output[0] = '\0';
     if (!job_id || !job_id[0]) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (cap_lua_ensure_owner_tag_lock() != ESP_OK) {
+        snprintf(output, output_size, "Error: failed to initialize Lua runtime lock");
+        return ESP_ERR_NO_MEM;
+    }
+    cap_lua_exec_ctx_t *ctx = calloc(1, sizeof(*ctx));
+    if (!ctx) {
+        snprintf(output, output_size, "Error: failed to allocate Lua runtime context");
+        return ESP_ERR_NO_MEM;
+    }
+    ctx->buf = output;
+    ctx->size = output_size;
+    ctx->deadline_us = timeout_ms ? esp_timer_get_time() + (int64_t)timeout_ms * 1000 : 0;
+    ctx->stop_requested = stop_requested;
+    ctx->log_fn = log_fn;
+    ctx->log_ctx = log_ctx;
     output[0] = '\0';
-    strlcpy(ctx.job_id, job_id, sizeof(ctx.job_id));
+    strlcpy(ctx->job_id, job_id, sizeof(ctx->job_id));
 
-    /* Mint the owner tag before opening any Lua state so early-exit paths
-     * still have a well-formed tag for the closing release_by_tag. */
+    /* The owner tag remains valid through all hardware cleanup. */
     owning_task = xTaskGetCurrentTaskHandle();
     job_seq = (unsigned)atomic_fetch_add(&s_owner_tag_next_id, 1);
-    snprintf(ctx.owner_tag, sizeof(ctx.owner_tag), "lua/job/%u", job_seq);
-    cap_lua_owner_tag_register(owning_task, ctx.owner_tag);
+    snprintf(ctx->owner_tag, sizeof(ctx->owner_tag), "lua/job/%u", job_seq);
+    cap_lua_owner_tag_register(owning_task, ctx->owner_tag);
 
     if (!cap_lua_run_path_is_valid(path)) {
         snprintf(output, output_size, "Error: Lua path must be a valid .lua script path");
@@ -618,10 +626,12 @@ esp_err_t cap_lua_runtime_execute_file(const char *path,
         goto cleanup_tag_only;
     }
 
+    cap_lua_hw_bind(L, cap_lua_get_hw_registry());
     luaL_openlibs(L);
+    cap_lua_restrict_debug(L);
     cap_lua_load_registered_modules(L);
     cap_lua_add_script_dir_to_package_path(L, path);
-    cap_lua_set_exec_ctx(L, &ctx);
+    cap_lua_set_exec_ctx(L, ctx);
     if (cap_lua_set_args_global(L, args_json) != ESP_OK) {
         snprintf(output, output_size,
                  "Error: Lua args JSON nesting exceeds %d levels",
@@ -629,44 +639,39 @@ esp_err_t cap_lua_runtime_execute_file(const char *path,
         result_err = ESP_ERR_INVALID_SIZE;
         goto cleanup_full;
     }
-    lua_pushlightuserdata(L, &ctx);
+    lua_pushlightuserdata(L, ctx);
     lua_pushcclosure(L, cap_lua_print_capture, 1);
     lua_setglobal(L, "print");
     lua_sethook(L, cap_lua_timeout_hook, LUA_MASKCOUNT, 100);
 
     status = luaL_dofile(L, path);
-    /* Run user exit_cleanup callbacks (which may release their own handles)
-     * before the safety-net release_by_tag below. Order must hold on the
-     * error path too. */
-    cap_lua_run_exit_cleanups(L);
     if (status != LUA_OK) {
         const char *msg = lua_tostring(L, -1);
-        if (ctx.len > 0) {
-            cap_lua_output_append(&ctx, "ERROR: ", 7);
+        if (ctx->len > 0) {
+            cap_lua_output_append(ctx, "ERROR: ", 7);
         }
-        cap_lua_output_append(&ctx,
+        cap_lua_output_append(ctx,
                               msg ? msg : "unknown Lua error",
                               strlen(msg ? msg : "unknown Lua error"));
-        cap_lua_output_append(&ctx, "\n", 1);
+        cap_lua_output_append(ctx, "\n", 1);
         result_err = ESP_FAIL;
         goto cleanup_full;
     }
 
-    if (ctx.len == 0) {
-        cap_lua_output_append(&ctx, "Lua script completed with no output.\n", 36);
-    } else if (ctx.truncated) {
-        cap_lua_output_append(&ctx, "[output truncated]\n", 19);
+    if (ctx->len == 0) {
+        cap_lua_output_append(ctx, "Lua script completed with no output.\n", 36);
+    } else if (ctx->truncated) {
+        cap_lua_output_append(ctx, "[output truncated]\n", 19);
     }
 
 cleanup_full:
-    if (L) {
-        lua_close(L);
-    }
+    /* Finalizers may close existing handles, but cannot acquire new hardware. */
+    cap_lua_hw_bind(L, NULL);
+    lua_sethook(L, NULL, 0, 0);
+    cap_lua_run_exit_cleanups(L);
+    lua_close(L);
 cleanup_tag_only:
-    /* Runs after Lua-side __gc handlers have had their chance so it only
-     * sweeps leases that Lua code failed to release itself. The tag stays
-     * registered until after this call so handlers can still query it. */
-    cap_lua_release_job_hw_leases(ctx.owner_tag);
-    cap_lua_owner_tag_unregister(owning_task, ctx.owner_tag);
+    cap_lua_owner_tag_unregister(owning_task, ctx->owner_tag);
+    free(ctx);
     return result_err;
 }

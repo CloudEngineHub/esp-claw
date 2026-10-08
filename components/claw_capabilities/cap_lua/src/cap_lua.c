@@ -41,6 +41,21 @@ static cap_lua_exit_cleanup_node_t *s_exit_cleanups;
 static size_t s_exit_cleanup_count;
 static bool s_builtin_modules_registered;
 static bool s_module_registration_locked;
+static claw_hw_registry_handle_t s_hw_registry;
+
+esp_err_t cap_lua_set_hw_registry(claw_hw_registry_handle_t registry)
+{
+    if (!registry) return ESP_ERR_INVALID_ARG;
+    if (s_hw_registry == registry) return ESP_OK;
+    if (s_hw_registry || s_module_registration_locked) return ESP_ERR_INVALID_STATE;
+    s_hw_registry = registry;
+    return ESP_OK;
+}
+
+claw_hw_registry_handle_t cap_lua_get_hw_registry(void)
+{
+    return s_hw_registry;
+}
 
 static bool cap_lua_abs_dir_is_valid(const char *dir);
 

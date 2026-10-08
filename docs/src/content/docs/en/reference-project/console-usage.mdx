@@ -97,6 +97,19 @@ router --last
 />
 
 
+## Hardware resources: hwmap
+
+`hwmap` shows registered resources and their users; `hwmap query <key>` selects one resource. `EXCLUSIVE` permits at most one claim, while `SHARED` permits multiple claims. `USERS` is the current usage count and `CLAIM` is the usage credential ID. Registered idle resources show `(free)`; an unregistered key returns an error.
+
+```sh
+hwmap
+hwmap query gpio:1
+hwmap query bus:i2c0
+hwmap query device:display_lcd
+```
+
+Resources are registered at startup and claimed when Board Manager actually initializes each driver. Successful driver deinitialization releases its claim. Flash, PSRAM and console resources are outside this registry’s protection scope. Shared access reuses an existing hardware object and does not guarantee that arbitrary concurrent operations are safe.
+
 ## Other registered commands
 
 Depending on the build configuration, `edge_agent` can also register `lua`, `scheduler`, `router`, `skill`, `hwmap`, and `wifi`.

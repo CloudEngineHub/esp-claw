@@ -36,6 +36,7 @@ idf_component_register(
     REQUIRES
         cap_lua
         esp_board_manager
+        esp_driver_i2c
     PRIV_REQUIRES
         espressif__i2c_bus
 )

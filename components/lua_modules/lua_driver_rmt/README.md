@@ -5,14 +5,18 @@ This module exposes raw RMT symbol transmit and receive to Lua. Use it for proto
 ## How to call
 
 - Import it with `local rmt = require("rmt")`
-- Create a TX channel with `local tx = rmt.tx({ gpio = 39 })`
-- Create an RX channel with `local rx = rmt.rx({ gpio = 38 })`
+- Create a TX channel with `local tx = rmt.tx({ gpio = 4 })`
+- Create an RX channel with `local rx = rmt.rx({ gpio = 5 })`
 - Send raw symbols with `tx:send(symbols [, timeout_ms])`
 - Receive raw symbols with `local symbols, err = rx:receive(timeout_ms)`
 - For loopback or externally triggered captures, arm RX first with `rx:start()`,
   then fetch the result with `local symbols, err = rx:read(timeout_ms)`
 - Inspect configuration with `handle:info()`
 - Close handles with `handle:close()`
+
+Use `handle:close()` for prompt release; Lua GC and job exit also finalize handles. A failed close retains the channel, buffers, and GPIO claim for retry. After a TX timeout, close the handle before creating a replacement; the transmit buffer remains owned until hardware stops.
+
+GPIO4 and GPIO5 in these examples are not reserved by the ACM2 manifest. Select registered, unoccupied pins on other boards.
 
 ## TX options
 
@@ -52,7 +56,7 @@ At the default `1000000` Hz resolution, one tick is one microsecond.
 ```lua
 local rmt = require("rmt")
 
-local tx = rmt.tx({ gpio = 39, carrier_hz = 38000 })
+local tx = rmt.tx({ gpio = 4, carrier_hz = 38000 })
 tx:send({
     { level0 = 1, duration0 = 9000, level1 = 0, duration1 = 4500 },
     { level0 = 1, duration0 = 560,  level1 = 0, duration1 = 560 },

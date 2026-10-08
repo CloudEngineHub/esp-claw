@@ -17,7 +17,10 @@
 #include "lauxlib.h"
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/portmacro.h"
+#include "freertos/semphr.h"
+#include "cap_lua_hw.h"
+#include <stdio.h>
+#include "driver/gpio.h"
 
 #define LUA_DRIVER_LEDC_METATABLE "ledc"
 #define LUA_DRIVER_LEDC_DEFAULT_DUTY_PERCENT 50.0
@@ -25,24 +28,13 @@
 #define LUA_DRIVER_LEDC_MIN_DUTY_RES_BITS 1
 #define LUA_DRIVER_LEDC_MAX_DUTY_RES_BITS 14
 
-#if CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT
-/*
- * Some board-manager camera devices generate sensor XCLK with LEDC timer0 /
- * channel0 before Lua starts. The Lua-side allocator cannot see that external
- * ownership, so keep dynamic Lua PWM handles away from slot 0 on camera boards.
- */
-#define LUA_DRIVER_LEDC_FIRST_DYNAMIC_CHANNEL 1
-#define LUA_DRIVER_LEDC_FIRST_DYNAMIC_TIMER 1
-#else
-#define LUA_DRIVER_LEDC_FIRST_DYNAMIC_CHANNEL 0
-#define LUA_DRIVER_LEDC_FIRST_DYNAMIC_TIMER 0
-#endif
-
 static const char *TAG = "lua_driver_ledc";
-static portMUX_TYPE s_ledc_alloc_mux = portMUX_INITIALIZER_UNLOCKED;
+static SemaphoreHandle_t s_ledc_lock;
 
 typedef struct {
     bool in_use;
+    bool ready;
+    cap_lua_hw_lease_t lease;
     ledc_mode_t speed_mode;
     ledc_timer_t timer_num;
     ledc_timer_bit_t duty_resolution;
@@ -52,6 +44,7 @@ typedef struct {
 
 typedef struct {
     int gpio;
+    cap_lua_hw_lease_t lease;
     ledc_mode_t speed_mode;
     ledc_channel_t channel;
     ledc_timer_t timer_num;
@@ -60,16 +53,18 @@ typedef struct {
     double duty_percent;
     bool running;
     bool allocated;
+    bool channel_configured;
+    bool closing;
 } lua_driver_ledc_ud_t;
 
 static lua_driver_ledc_timer_slot_t s_timer_slots[LEDC_TIMER_MAX];
-static bool s_channel_in_use[LEDC_CHANNEL_MAX];
+
 
 static lua_driver_ledc_ud_t *lua_driver_ledc_get_ud(lua_State *L, int idx)
 {
     lua_driver_ledc_ud_t *ud =
         (lua_driver_ledc_ud_t *)luaL_checkudata(L, idx, LUA_DRIVER_LEDC_METATABLE);
-    if (!ud || !ud->allocated) {
+    if (!ud || !ud->allocated || ud->closing) {
         luaL_error(L, "ledc: invalid or closed handle");
     }
     return ud;
@@ -95,152 +90,70 @@ static bool lua_driver_ledc_timer_slot_matches(const lua_driver_ledc_timer_slot_
                                                ledc_timer_bit_t duty_resolution,
                                                uint32_t frequency_hz)
 {
-    return slot->in_use &&
+    return slot->in_use && slot->ready &&
            slot->speed_mode == speed_mode &&
            slot->duty_resolution == duty_resolution &&
            slot->frequency_hz == frequency_hz;
 }
 
-static esp_err_t lua_driver_ledc_alloc_channel(ledc_channel_t *out_channel)
+static esp_err_t lua_driver_ledc_acquire_timer(lua_State *L, lua_driver_ledc_ud_t *ud)
 {
-    int selected = -1;
-
-    portENTER_CRITICAL(&s_ledc_alloc_mux);
-    for (int i = LUA_DRIVER_LEDC_FIRST_DYNAMIC_CHANNEL; i < LEDC_CHANNEL_MAX; ++i) {
-        if (!s_channel_in_use[i]) {
-            s_channel_in_use[i] = true;
-            selected = i;
-            break;
+    esp_err_t err = ESP_ERR_NOT_FOUND;
+    xSemaphoreTake(s_ledc_lock, portMAX_DELAY);
+    for (int i = 0; i < LEDC_TIMER_MAX; ++i) {
+        lua_driver_ledc_timer_slot_t *slot = &s_timer_slots[i];
+        if (lua_driver_ledc_timer_slot_matches(slot, ud->speed_mode, ud->duty_resolution, ud->frequency_hz) &&
+            slot->lease.registry == cap_lua_hw_get_registry(L)) {
+            slot->refcount++;
+            ud->timer_num = i;
+            xSemaphoreGive(s_ledc_lock);
+            return ESP_OK;
         }
     }
-    portEXIT_CRITICAL(&s_ledc_alloc_mux);
-
-    if (selected < 0) {
-        return ESP_ERR_NO_MEM;
-    }
-
-    *out_channel = (ledc_channel_t)selected;
-    return ESP_OK;
-}
-
-static void lua_driver_ledc_release_channel(ledc_channel_t channel)
-{
-    if ((int)channel < 0 || (int)channel >= LEDC_CHANNEL_MAX) {
-        return;
-    }
-
-    portENTER_CRITICAL(&s_ledc_alloc_mux);
-    s_channel_in_use[(int)channel] = false;
-    portEXIT_CRITICAL(&s_ledc_alloc_mux);
-}
-
-static esp_err_t lua_driver_ledc_acquire_timer(ledc_mode_t speed_mode,
-                                               ledc_timer_bit_t duty_resolution,
-                                               uint32_t frequency_hz,
-                                               ledc_timer_t *out_timer)
-{
-    int slot_index = -1;
-    bool needs_config = false;
-
-    portENTER_CRITICAL(&s_ledc_alloc_mux);
-    for (int i = LUA_DRIVER_LEDC_FIRST_DYNAMIC_TIMER; i < LEDC_TIMER_MAX; ++i) {
-        if (lua_driver_ledc_timer_slot_matches(&s_timer_slots[i],
-                                               speed_mode,
-                                               duty_resolution,
-                                               frequency_hz)) {
-            s_timer_slots[i].refcount++;
-            slot_index = i;
-            break;
-        }
-    }
-
-    if (slot_index < 0) {
-        for (int i = LUA_DRIVER_LEDC_FIRST_DYNAMIC_TIMER; i < LEDC_TIMER_MAX; ++i) {
-            if (!s_timer_slots[i].in_use) {
-                s_timer_slots[i] = (lua_driver_ledc_timer_slot_t) {
-                    .in_use = true,
-                    .speed_mode = speed_mode,
-                    .timer_num = (ledc_timer_t)i,
-                    .duty_resolution = duty_resolution,
-                    .frequency_hz = frequency_hz,
-                    .refcount = 1,
-                };
-                slot_index = i;
-                needs_config = true;
-                break;
-            }
-        }
-    }
-    portEXIT_CRITICAL(&s_ledc_alloc_mux);
-
-    if (slot_index < 0) {
-        return ESP_ERR_NO_MEM;
-    }
-
-    if (needs_config) {
-        ledc_timer_config_t timer_config = {
-            .speed_mode = speed_mode,
-            .duty_resolution = duty_resolution,
-            .timer_num = (ledc_timer_t)slot_index,
-            .freq_hz = frequency_hz,
-            .clk_cfg = LEDC_AUTO_CLK,
+    for (int i = 0; i < LEDC_TIMER_MAX; ++i) {
+        lua_driver_ledc_timer_slot_t *slot = &s_timer_slots[i];
+        if (slot->in_use) continue;
+        char key[CLAW_HW_KEY_SIZE];
+        snprintf(key, sizeof(key), "ledc_timer:%d:%d", ud->speed_mode, i);
+        const char *keys[] = { key };
+        err = cap_lua_hw_claim(L, &slot->lease, "lua/ledc-timer", keys, 1);
+        if (err != ESP_OK) continue;
+        slot->in_use = true;
+        slot->speed_mode = ud->speed_mode;
+        slot->timer_num = i;
+        slot->duty_resolution = ud->duty_resolution;
+        slot->frequency_hz = ud->frequency_hz;
+        slot->refcount = 1;
+        ud->timer_num = i;
+        ledc_timer_config_t cfg = {
+            .speed_mode = ud->speed_mode, .duty_resolution = ud->duty_resolution,
+            .timer_num = i, .freq_hz = ud->frequency_hz, .clk_cfg = LEDC_AUTO_CLK,
         };
-        esp_err_t err = ledc_timer_config(&timer_config);
+        err = ledc_timer_config(&cfg);
+        slot->ready = err == ESP_OK;
         if (err != ESP_OK) {
-            portENTER_CRITICAL(&s_ledc_alloc_mux);
-            memset(&s_timer_slots[slot_index], 0, sizeof(s_timer_slots[slot_index]));
-            portEXIT_CRITICAL(&s_ledc_alloc_mux);
-            return err;
+            /* Retain the timer until the object's close path confirms it stopped. */
+            ud->allocated = true;
         }
+        xSemaphoreGive(s_ledc_lock);
+        return err;
     }
-
-    *out_timer = (ledc_timer_t)slot_index;
-    return ESP_OK;
+    xSemaphoreGive(s_ledc_lock);
+    return err;
 }
 
-static uint32_t lua_driver_ledc_timer_refcount(ledc_timer_t timer_num)
+static esp_err_t lua_driver_ledc_release_timer(ledc_timer_t timer_num)
 {
-    uint32_t refcount = 0;
-
-    if ((int)timer_num < 0 || (int)timer_num >= LEDC_TIMER_MAX) {
-        return 0;
+    esp_err_t err = ESP_OK;
+    xSemaphoreTake(s_ledc_lock, portMAX_DELAY);
+    lua_driver_ledc_timer_slot_t *slot = &s_timer_slots[timer_num];
+    if (slot->refcount == 1) {
+        err = ledc_timer_pause(slot->speed_mode, timer_num);
+        if (err == ESP_OK) err = cap_lua_hw_release(&slot->lease);
     }
-
-    portENTER_CRITICAL(&s_ledc_alloc_mux);
-    refcount = s_timer_slots[(int)timer_num].refcount;
-    portEXIT_CRITICAL(&s_ledc_alloc_mux);
-    return refcount;
-}
-
-static void lua_driver_ledc_update_timer_frequency(ledc_timer_t timer_num, uint32_t frequency_hz)
-{
-    if ((int)timer_num < 0 || (int)timer_num >= LEDC_TIMER_MAX) {
-        return;
-    }
-
-    portENTER_CRITICAL(&s_ledc_alloc_mux);
-    if (s_timer_slots[(int)timer_num].in_use) {
-        s_timer_slots[(int)timer_num].frequency_hz = frequency_hz;
-    }
-    portEXIT_CRITICAL(&s_ledc_alloc_mux);
-}
-
-static void lua_driver_ledc_release_timer(ledc_timer_t timer_num)
-{
-    if ((int)timer_num < 0 || (int)timer_num >= LEDC_TIMER_MAX) {
-        return;
-    }
-
-    portENTER_CRITICAL(&s_ledc_alloc_mux);
-    if (s_timer_slots[(int)timer_num].in_use) {
-        if (s_timer_slots[(int)timer_num].refcount > 0) {
-            s_timer_slots[(int)timer_num].refcount--;
-        }
-        if (s_timer_slots[(int)timer_num].refcount == 0) {
-            memset(&s_timer_slots[(int)timer_num], 0, sizeof(s_timer_slots[(int)timer_num]));
-        }
-    }
-    portEXIT_CRITICAL(&s_ledc_alloc_mux);
+    if (err == ESP_OK && --slot->refcount == 0) memset(slot, 0, sizeof(*slot));
+    xSemaphoreGive(s_ledc_lock);
+    return err;
 }
 
 static esp_err_t lua_driver_ledc_apply_duty(lua_driver_ledc_ud_t *ud)
@@ -260,23 +173,20 @@ static esp_err_t lua_driver_ledc_apply_duty(lua_driver_ledc_ud_t *ud)
 
 static esp_err_t lua_driver_ledc_destroy(lua_driver_ledc_ud_t *ud)
 {
-    esp_err_t stop_err = ESP_OK;
-
-    if (!ud || !ud->allocated) {
-        return ESP_OK;
-    }
-
-    if (ud->running) {
-        stop_err = ledc_stop(ud->speed_mode, ud->channel, 0);
+    if (!ud) return ESP_OK;
+    ud->closing = true;
+    if (ud->allocated) {
+        esp_err_t err = ud->channel_configured ? ledc_stop(ud->speed_mode, ud->channel, 0) : ESP_OK;
+        if (err != ESP_OK) return err;
+        ud->channel_configured = false;
         ud->running = false;
+        err = gpio_reset_pin(ud->gpio);
+        if (err != ESP_OK) return err;
+        err = lua_driver_ledc_release_timer(ud->timer_num);
+        if (err != ESP_OK) return err;
+        ud->allocated = false;
     }
-
-    lua_driver_ledc_release_channel(ud->channel);
-    lua_driver_ledc_release_timer(ud->timer_num);
-    ud->allocated = false;
-    ud->gpio = -1;
-
-    return stop_err;
+    return cap_lua_hw_release(&ud->lease);
 }
 
 static void lua_driver_ledc_parse_config(lua_State *L, int idx, lua_driver_ledc_ud_t *config)
@@ -340,41 +250,33 @@ static void lua_driver_ledc_parse_config(lua_State *L, int idx, lua_driver_ledc_
     config->duty_resolution = (ledc_timer_bit_t)duty_resolution_bits;
 }
 
-static esp_err_t lua_driver_ledc_create(lua_driver_ledc_ud_t *ud)
+static esp_err_t lua_driver_ledc_create(lua_State *L, lua_driver_ledc_ud_t *ud)
 {
-    esp_err_t err = lua_driver_ledc_alloc_channel(&ud->channel);
+    char key_buf[2][32];
+    snprintf(key_buf[0], sizeof(key_buf[0]), "gpio:%d", ud->gpio);
+    const char *keys[] = { key_buf[0], key_buf[1] };
+    esp_err_t err = ESP_ERR_NOT_FOUND;
+    for (int i = 0; i < LEDC_CHANNEL_MAX; ++i) {
+        snprintf(key_buf[1], sizeof(key_buf[1]), "ledc_channel:%d:%d", ud->speed_mode, i);
+        err = cap_lua_hw_claim(L, &ud->lease, "lua/ledc-channel", keys, 2);
+        if (err == ESP_OK) { ud->channel = i; break; }
+    }
+    if (err != ESP_OK) return err;
+    err = lua_driver_ledc_acquire_timer(L, ud);
     if (err != ESP_OK) {
+        lua_driver_ledc_destroy(ud);
         return err;
     }
-
-    err = lua_driver_ledc_acquire_timer(ud->speed_mode,
-                                        ud->duty_resolution,
-                                        ud->frequency_hz,
-                                        &ud->timer_num);
-    if (err != ESP_OK) {
-        lua_driver_ledc_release_channel(ud->channel);
-        return err;
-    }
-
-    ledc_channel_config_t channel_config = {
-        .gpio_num = ud->gpio,
-        .speed_mode = ud->speed_mode,
-        .channel = ud->channel,
-        .intr_type = LEDC_INTR_DISABLE,
-        .timer_sel = ud->timer_num,
-        .duty = 0,
-        .hpoint = 0,
-    };
-    err = ledc_channel_config(&channel_config);
-    if (err != ESP_OK) {
-        lua_driver_ledc_release_channel(ud->channel);
-        lua_driver_ledc_release_timer(ud->timer_num);
-        return err;
-    }
-
     ud->allocated = true;
-    ud->running = false;
-    return ESP_OK;
+    ledc_channel_config_t cfg = {
+        .gpio_num = ud->gpio, .speed_mode = ud->speed_mode, .channel = ud->channel,
+        .intr_type = LEDC_INTR_DISABLE, .timer_sel = ud->timer_num, .duty = 0, .hpoint = 0,
+    };
+    ud->channel_configured = true;
+    err = ledc_channel_config(&cfg);
+    if (err != ESP_OK) lua_driver_ledc_destroy(ud);
+    else ESP_LOGI(TAG, "GPIO%d mode=%d channel=%d timer=%d frequency=%lu resolution=%d", ud->gpio, ud->speed_mode, ud->channel, ud->timer_num, (unsigned long)ud->frequency_hz, ud->duty_resolution);
+    return err;
 }
 
 static int lua_driver_ledc_gc(lua_State *L)
@@ -437,36 +339,18 @@ static int lua_driver_ledc_set_duty(lua_State *L)
 static int lua_driver_ledc_set_frequency(lua_State *L)
 {
     lua_driver_ledc_ud_t *ud = lua_driver_ledc_get_ud(L, 1);
-    const uint32_t frequency_hz = (uint32_t)luaL_checkinteger(L, 2);
-    const uint32_t refcount = lua_driver_ledc_timer_refcount(ud->timer_num);
-    uint32_t actual_frequency = 0;
-    esp_err_t err;
-
-    if (frequency_hz == 0) {
-        return luaL_error(L, "ledc frequency_hz must be > 0");
+    lua_Integer frequency = luaL_checkinteger(L, 2);
+    luaL_argcheck(L, frequency > 0 && (uint64_t)frequency <= UINT32_MAX, 2, "invalid frequency");
+    xSemaphoreTake(s_ledc_lock, portMAX_DELAY);
+    lua_driver_ledc_timer_slot_t *slot = &s_timer_slots[ud->timer_num];
+    if (slot->refcount != 1) {
+        xSemaphoreGive(s_ledc_lock);
+        return luaL_error(L, "ledc timer is shared; cannot change its frequency");
     }
-    if (frequency_hz == ud->frequency_hz) {
-        return 0;
-    }
-    if (refcount > 1) {
-        return luaL_error(L,
-                          "ledc set_frequency cannot reconfigure a shared timer; close other handles first");
-    }
-
-    actual_frequency = ledc_set_freq(ud->speed_mode, ud->timer_num, frequency_hz);
-    if (actual_frequency == 0) {
-        return luaL_error(L, "ledc set_frequency failed");
-    }
-
-    ud->frequency_hz = actual_frequency;
-    lua_driver_ledc_update_timer_frequency(ud->timer_num, actual_frequency);
-
-    if (ud->running) {
-        err = lua_driver_ledc_apply_duty(ud);
-        if (err != ESP_OK) {
-            return luaL_error(L, "ledc set_frequency failed: %s", esp_err_to_name(err));
-        }
-    }
+    esp_err_t err = ledc_set_freq(ud->speed_mode, ud->timer_num, frequency);
+    if (err == ESP_OK) ud->frequency_hz = slot->frequency_hz = frequency;
+    xSemaphoreGive(s_ledc_lock);
+    if (err != ESP_OK) return luaL_error(L, "ledc set_frequency failed: %s", esp_err_to_name(err));
     return 0;
 }
 
@@ -489,14 +373,15 @@ static int lua_driver_ledc_new(lua_State *L)
     lua_driver_ledc_ud_t *ud =
         (lua_driver_ledc_ud_t *)lua_newuserdata(L, sizeof(*ud));
     *ud = config;
+    luaL_getmetatable(L, LUA_DRIVER_LEDC_METATABLE);
+    lua_setmetatable(L, -2);
 
-    esp_err_t err = lua_driver_ledc_create(ud);
+    esp_err_t err = lua_driver_ledc_create(L, ud);
     if (err != ESP_OK) {
+        (void)lua_driver_ledc_destroy(ud);
         return luaL_error(L, "ledc new failed: %s", esp_err_to_name(err));
     }
 
-    luaL_getmetatable(L, LUA_DRIVER_LEDC_METATABLE);
-    lua_setmetatable(L, -2);
     return 1;
 }
 
@@ -528,5 +413,7 @@ int luaopen_ledc(lua_State *L)
 
 esp_err_t lua_driver_ledc_register(void)
 {
+    if (!s_ledc_lock) s_ledc_lock = xSemaphoreCreateMutex();
+    if (!s_ledc_lock) return ESP_ERR_NO_MEM;
     return cap_lua_register_module("ledc", luaopen_ledc);
 }

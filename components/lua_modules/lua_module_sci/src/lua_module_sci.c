@@ -328,6 +328,8 @@ static int lua_module_sci_push_string_command(lua_State *L,
 
 static int lua_module_sci_new(lua_State *L)
 {
+    return luaL_error(L, "lua_module_sci: raw hardware creation is not supported until resource ownership is integrated");
+
     lua_Integer port = luaL_checkinteger(L, 1);
     lua_Integer sda = luaL_checkinteger(L, 2);
     lua_Integer scl = luaL_checkinteger(L, 3);

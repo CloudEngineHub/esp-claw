@@ -72,7 +72,7 @@ static esp_err_t bmi270_backend_probe(lua_imu_backend_ctx_t *ctx, uint8_t i2c_ad
     }
     bmi270_state_t *st = (bmi270_state_t *)ctx->state;
 
-    esp_err_t err = bmi270_sensor_create(ctx->i2c_bus_handle, &st->sensor_handle,
+    esp_err_t err = bmi270_sensor_create_from_master_bus(ctx->master_bus, &st->sensor_handle,
                                          bmi270_config_file,
                                          BMI2_GYRO_CROSS_SENS_ENABLE | BMI2_CRT_RTOSK_ENABLE);
     if (err != ESP_OK || st->sensor_handle == NULL) {
@@ -91,13 +91,11 @@ static esp_err_t bmi270_backend_probe(lua_imu_backend_ctx_t *ctx, uint8_t i2c_ad
     int8_t rslt = bmi2_set_int_pin_config(&int_pin_cfg, st->sensor_handle);
     if (rslt != BMI2_OK) {
         ESP_LOGE(TAG, "Failed to configure BMI270 INT1 pin: %d", rslt);
-        bmi270_sensor_del(&st->sensor_handle);
         return ESP_FAIL;
     }
 
     err = bmi270_apply_default_runtime_config(st->sensor_handle);
     if (err != ESP_OK) {
-        bmi270_sensor_del(&st->sensor_handle);
         return err;
     }
 
@@ -105,12 +103,11 @@ static esp_err_t bmi270_backend_probe(lua_imu_backend_ctx_t *ctx, uint8_t i2c_ad
     return ESP_OK;
 }
 
-static void bmi270_backend_destroy(lua_imu_backend_ctx_t *ctx)
+static esp_err_t bmi270_backend_destroy(lua_imu_backend_ctx_t *ctx)
 {
-    bmi270_state_t *st = (bmi270_state_t *)ctx->state;
-    if (st->sensor_handle != NULL) {
-        bmi270_sensor_del(&st->sensor_handle);
-    }
+    bmi270_state_t *st = ctx->state;
+    if (st->sensor_handle) return bmi270_sensor_del(&st->sensor_handle);
+    return ESP_OK;
 }
 
 static esp_err_t bmi270_backend_read_sample(lua_imu_backend_ctx_t *ctx, lua_imu_sample_t *out)

@@ -4,7 +4,7 @@ This document defines the source layout and authoring rules for components under
 
 Two naming conventions exist:
 
-- `lua_driver_xx` — low-level hardware peripheral drivers (ADC, GPIO, I2C, MCPWM, Touch, UART).
+- `lua_driver_xx` — low-level hardware peripheral drivers (ADC, GPIO, I2C, LEDC, MCPWM, RMT, Touch, UART).
 - `lua_module_xx` — higher-level modules (display, storage, system, etc.).
 
 ## Directory Layout

@@ -9,22 +9,10 @@ local HTTP_TIMEOUT_MS = 20000
 local HTTP_MAX_BODY_BYTES = 65535
 local HTTP_MAX_FILE_BYTES = 10 * 1024 * 1024 -- Currently we do not expect to download files larger than 10MB.
 
-local function string_arg(key, default)
-    local value = a[key]
-    if type(value) == "string" and value ~= "" then
-        return value
-    end
-    return default
-end
-
-local function validate_skill_name(skill_name)
-    if not skill_name or skill_name == "" then
-        error("args.skill_name is required")
-    end
-    if not skill_name:match("^[A-Za-z0-9_-]+$") then
-        error("skill_name must match ^[A-Za-z0-9_-]+$")
-    end
-end
+local packages = {
+    skill = { remote = "", directory = "skills", manifest = "SKILL.md" },
+    app = { remote = "apps/", directory = "apps", manifest = "launcher.json" },
+}
 
 local function call_http(url)
     local ok, out, err = capability.call("http_request", {
@@ -101,17 +89,6 @@ local function fetch_text(url)
     return status, body
 end
 
-local function fail_for_status(skill_name, status, body)
-    if status == 404 then
-        error("skill not found: " .. skill_name)
-    end
-    error(string.format("request failed with HTTP %d: %s", status, body))
-end
-
-local function build_skill_base_dir(skill_name)
-    return storage.join_path(storage.get_root_dir(), "skills", skill_name)
-end
-
 local function ensure_dir(path)
     if storage.exists(path) then
         return
@@ -133,24 +110,42 @@ local function ensure_dir(path)
     end
 end
 
-local function validate_rel_file_name(name, group_name)
-    if type(name) ~= "string" or name == "" then
-        error("invalid file name in extra_files." .. group_name)
+local function validate_files(files, manifest)
+    if type(files) ~= "table" or #files == 0 then
+        error("args.files must be a non-empty array")
     end
-    if name:find("/", 1, true) or name:find("\\", 1, true) then
-        error("extra_files." .. group_name .. " entries must be file names only: " .. name)
+    local seen = {}
+    for index, path in pairs(files) do
+        if type(index) ~= "number" or index % 1 ~= 0 or index < 1 or index > #files then
+            error("args.files must be an array")
+        end
+        if type(path) ~= "string" or path == "" or path:find("[%c\\]") or path:sub(1, 1) == "/" or path:sub(-1) == "/" or path:find("//", 1, true) then
+            error("invalid package file path: " .. tostring(path))
+        end
+        for part in path:gmatch("[^/]+") do
+            if part == "." or part == ".." then
+                error("invalid package file path: " .. path)
+            end
+        end
+        if seen[path] then
+            error("duplicate package file: " .. path)
+        end
+        seen[path] = true
+    end
+    for index = 1, #files do
+        if files[index] == nil then
+            error("args.files must be a dense array")
+        end
+    end
+    if not seen[manifest] then
+        error("missing package manifest: " .. manifest)
     end
 end
 
-local function get_extra_files()
-    local extra_files = a.extra_files
-    if extra_files == nil then
-        return {}
-    end
-    if type(extra_files) ~= "table" then
-        error("args.extra_files must be an object")
-    end
-    return extra_files
+local function encode_path(path)
+    return (path:gsub("[^%w%-%._~/]", function(char)
+        return string.format("%%%02X", char:byte())
+    end))
 end
 
 local function download_and_save(url, path)
@@ -166,71 +161,37 @@ local function download_and_save(url, path)
     end
 end
 
-local function fetch_metadata(skill_name)
-    local metadata_url = string.format("%s/%s/_metadata.json", HUB_BASE, skill_name)
-    local status, body = fetch_text(metadata_url)
-    if status ~= 200 then
-        fail_for_status(skill_name, status, body)
-    end
-    print(body)
-end
-
-local function install_skill(skill_name)
-    local skill_name_from_metadata = string_arg("skill_name_from_metadata", nil)
-    if skill_name_from_metadata and skill_name_from_metadata ~= skill_name then
-        error(string.format(
-            "skill_name_from_metadata mismatch: expected %s, got %s",
-            skill_name,
-            skill_name_from_metadata))
-    end
-
-    local skill_dir = build_skill_base_dir(skill_name)
-    local skill_md_url = string.format("%s/%s/SKILL.md", HUB_BASE, skill_name)
-    local skill_md_path = storage.join_path(skill_dir, "SKILL.md")
-
-    ensure_dir(skill_dir)
-    download_and_save(skill_md_url, skill_md_path)
-
-    local extra_files = get_extra_files()
-    for group_name, files in pairs(extra_files) do
-        if type(files) ~= "table" then
-            error("extra_files." .. tostring(group_name) .. " must be an array")
-        end
-
-        local group_dir = storage.join_path(skill_dir, group_name)
-        if #files > 0 then
-            ensure_dir(group_dir)
-        end
-
-        for _, file_name in ipairs(files) do
-            validate_rel_file_name(file_name, group_name)
-            local file_url = string.format("%s/%s/%s/%s", HUB_BASE, skill_name, group_name, file_name)
-            local file_path = storage.join_path(group_dir, file_name)
-            download_and_save(file_url, file_path)
-        end
-    end
-
-    print("Installed skill: " .. skill_name)
-    print("Path: " .. skill_dir)
-end
-
 local function run()
-    local action = string_arg("action", "fetch_metadata")
-    local skill_name = string_arg("skill_name", nil)
-
-    validate_skill_name(skill_name)
-
-    if action == "fetch_metadata" then
-        fetch_metadata(skill_name)
+    local package = type(a.kind) == "string" and packages[a.kind]
+    if not package then
+        error("args.kind must be skill or app")
+    end
+    if type(a.id) ~= "string" or #a.id > 63 or not a.id:match("^[A-Za-z0-9_-]+$") then
+        error("args.id must match ^[A-Za-z0-9_-]{1,63}$")
+    end
+    local base_url = HUB_BASE .. "/" .. package.remote .. a.id
+    if a.action == "fetch_metadata" then
+        local status, body = fetch_text(base_url .. "/_metadata.json")
+        if status ~= 200 then
+            error(string.format("metadata request failed for %s:%s (HTTP %d)", a.kind, a.id, status))
+        end
+        print(body)
         return
     end
-
-    if action == "install" then
-        install_skill(skill_name)
-        return
+    if a.action ~= "install" then
+        error("args.action must be fetch_metadata or install")
     end
 
-    error("unsupported action: " .. tostring(action))
+    -- Validate the whole list before writing any package files.
+    validate_files(a.files, package.manifest)
+    local directory = storage.join_path(storage.get_root_dir(), package.directory, a.id)
+    for _, path in ipairs(a.files) do
+        local target = storage.join_path(directory, path)
+        ensure_dir(target:match("^(.+)/[^/]+$"))
+        download_and_save(base_url .. "/" .. encode_path(path), target)
+    end
+    -- The agent publishes only after every file has been downloaded.
+    print(string.format("Downloaded %s:%s to %s; publication required", a.kind, a.id, directory))
 end
 
 local ok, err = xpcall(run, debug.traceback)

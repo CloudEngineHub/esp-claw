@@ -354,6 +354,38 @@ static int lua_driver_ledc_set_frequency(lua_State *L)
     return 0;
 }
 
+static int lua_driver_ledc_get_info(lua_State *L)
+{
+    lua_driver_ledc_ud_t *ud = lua_driver_ledc_get_ud(L, 1);
+    xSemaphoreTake(s_ledc_lock, portMAX_DELAY);
+    uint32_t frequency = ledc_get_freq(ud->speed_mode, ud->timer_num);
+    uint32_t duty = ledc_get_duty(ud->speed_mode, ud->channel);
+    uint32_t refcount = s_timer_slots[ud->timer_num].refcount;
+    xSemaphoreGive(s_ledc_lock);
+    if (frequency == 0 || duty == UINT32_MAX) {
+        ESP_LOGE(TAG, "Failed to read LEDC timer=%d channel=%d", ud->timer_num, ud->channel);
+        return luaL_error(L, "ledc get_info failed: cannot read hardware state");
+    }
+
+    /* Lua allocations may run finalizers that acquire the same lock. */
+    lua_createtable(L, 0, 7);
+    lua_pushinteger(L, ud->gpio);
+    lua_setfield(L, -2, "gpio");
+    lua_pushinteger(L, ud->channel);
+    lua_setfield(L, -2, "channel");
+    lua_pushinteger(L, ud->timer_num);
+    lua_setfield(L, -2, "timer");
+    lua_pushinteger(L, frequency);
+    lua_setfield(L, -2, "frequency");
+    lua_pushinteger(L, ud->duty_resolution);
+    lua_setfield(L, -2, "resolution");
+    lua_pushinteger(L, duty);
+    lua_setfield(L, -2, "duty");
+    lua_pushinteger(L, refcount);
+    lua_setfield(L, -2, "timer_ref_count");
+    return 1;
+}
+
 static int lua_driver_ledc_close(lua_State *L)
 {
     lua_driver_ledc_ud_t *ud =
@@ -400,6 +432,8 @@ int luaopen_ledc(lua_State *L)
         lua_setfield(L, -2, "set_duty");
         lua_pushcfunction(L, lua_driver_ledc_set_frequency);
         lua_setfield(L, -2, "set_frequency");
+        lua_pushcfunction(L, lua_driver_ledc_get_info);
+        lua_setfield(L, -2, "get_info");
         lua_pushcfunction(L, lua_driver_ledc_close);
         lua_setfield(L, -2, "close");
     }

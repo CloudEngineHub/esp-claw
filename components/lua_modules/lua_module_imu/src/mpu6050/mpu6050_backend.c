@@ -13,7 +13,6 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "i2c_bus.h"
 #include "mpu6050.h"
 
 #include "lua_module_imu_backend.h"
@@ -69,6 +68,7 @@ static esp_err_t mpu6050_backend_probe(lua_imu_backend_ctx_t *ctx, uint8_t i2c_a
 
     memset(&st->sensor_handle, 0, sizeof(st->sensor_handle));
     st->owner_ctx = ctx;
+    ctx->sensor = &st->sensor_handle;
     st->sensor_handle.intf_ptr = st;
     st->sensor_handle.read = mpu6050_iface_read;
     st->sensor_handle.write = mpu6050_iface_write;
@@ -84,16 +84,15 @@ static esp_err_t mpu6050_backend_probe(lua_imu_backend_ctx_t *ctx, uint8_t i2c_a
 
 static esp_err_t mpu6050_backend_read_sample(lua_imu_backend_ctx_t *ctx, lua_imu_sample_t *out)
 {
-    mpu6050_state_t *st = (mpu6050_state_t *)ctx->state;
     mpu6050_raw_axes_t acc = { 0 };
     mpu6050_raw_axes_t gyro = { 0 };
     uint8_t int_status = 0;
 
-    int8_t rslt = mpu6050_read_accel_gyro(&acc, &gyro, &st->sensor_handle);
+    int8_t rslt = mpu6050_read_accel_gyro(&acc, &gyro, ctx->sensor);
     if (rslt != MPU6050_OK) {
         return ESP_FAIL;
     }
-    rslt = mpu6050_get_int_status(&int_status, &st->sensor_handle);
+    rslt = mpu6050_get_int_status(&int_status, ctx->sensor);
     if (rslt != MPU6050_OK) {
         return ESP_FAIL;
     }
@@ -110,9 +109,8 @@ static esp_err_t mpu6050_backend_read_sample(lua_imu_backend_ctx_t *ctx, lua_imu
 
 static esp_err_t mpu6050_backend_read_temperature(lua_imu_backend_ctx_t *ctx, int32_t *out)
 {
-    mpu6050_state_t *st = (mpu6050_state_t *)ctx->state;
     int16_t temp = 0;
-    int8_t rslt = mpu6050_read_temperature_raw(&temp, &st->sensor_handle);
+    int8_t rslt = mpu6050_read_temperature_raw(&temp, ctx->sensor);
     if (rslt != MPU6050_OK) {
         return ESP_FAIL;
     }
@@ -122,9 +120,8 @@ static esp_err_t mpu6050_backend_read_temperature(lua_imu_backend_ctx_t *ctx, in
 
 static esp_err_t mpu6050_backend_read_int_status(lua_imu_backend_ctx_t *ctx, uint32_t *out)
 {
-    mpu6050_state_t *st = (mpu6050_state_t *)ctx->state;
     uint8_t int_status = 0;
-    int8_t rslt = mpu6050_get_int_status(&int_status, &st->sensor_handle);
+    int8_t rslt = mpu6050_get_int_status(&int_status, ctx->sensor);
     if (rslt != MPU6050_OK) {
         return ESP_FAIL;
     }
@@ -148,7 +145,7 @@ static int mpu6050_backend_sdo_level_for_addr(uint8_t i2c_addr)
     return (i2c_addr == MPU6050_I2C_ADDRESS_HIGH) ? 1 : 0;
 }
 
-const lua_imu_backend_t lua_imu_backend = {
+const lua_imu_backend_t lua_imu_backend_mpu6050 = {
     .chip_name = "mpu6050",
     .state_size = sizeof(mpu6050_state_t),
     .probe = mpu6050_backend_probe,

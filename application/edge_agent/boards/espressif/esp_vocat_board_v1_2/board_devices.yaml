@@ -145,11 +145,12 @@ devices:
     type: custom
     version: 1.0.0
     init_skip: true
+    dependencies:
+      espressif/bmi270_sensor: "^0.4.1"
     config:
       i2c_addr: 0x68
       frequency: 400000
       int_gpio_num: 21
-      sdo_gpio_num: -1
     peripherals:
       - name: i2c_master
 

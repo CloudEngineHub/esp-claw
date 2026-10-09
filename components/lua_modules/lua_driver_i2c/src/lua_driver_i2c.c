@@ -24,7 +24,7 @@
 #define LUA_DRIVER_I2C_SCAN_MAX         128
 #define LUA_DRIVER_I2C_RW_MAX_LEN       1024
 
-typedef struct {
+typedef struct lua_driver_i2c_bus {
     i2c_master_bus_handle_t bus;
     int port;
     bool external_owned;
@@ -60,6 +60,20 @@ static lua_driver_i2c_device_ud_t *lua_driver_i2c_device_get_ud(lua_State *L, in
         luaL_error(L, "i2c device: invalid or closed handle");
     }
     return ud;
+}
+
+i2c_master_bus_handle_t lua_driver_i2c_ref_bus(lua_State *L, int index, int *port, lua_driver_i2c_bus_handle_t *owner)
+{
+    lua_driver_i2c_bus_ud_t *bus = lua_driver_i2c_bus_get_ud(L, index);
+    ++bus->devices;
+    *port = bus->port;
+    *owner = bus;
+    return bus->bus;
+}
+
+void lua_driver_i2c_unref_bus(lua_driver_i2c_bus_handle_t owner)
+{
+    if (owner) --owner->devices;
 }
 
 static uint8_t lua_driver_i2c_mem_addr(lua_State *L, int idx)

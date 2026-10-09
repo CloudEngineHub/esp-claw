@@ -217,7 +217,23 @@ def i2c_addresses(out, item, peripherals):
 def parse_device(out, item, peripherals):
     name, kind = item['name'], item.get('type')
     if kind == 'custom':
-        out.ignored_custom.append(name)
+        if item.get('chip') not in ('bmi270', 'icm42670', 'mpu6050'):
+            out.ignored_custom.append(name)
+            return
+        config = mapping(item.get('config'), name)
+        refs = peripheral_refs(item)
+        if len(refs) != 1:
+            raise BoardResourceError(f'{name}: IMU requires one I2C peripheral')
+        peripheral = peripherals.get(mapping(refs[0], name).get('name'), {})
+        if peripheral.get('type') != 'i2c':
+            raise BoardResourceError(f'{name}: IMU requires an I2C peripheral')
+        port = number(mapping(peripheral.get('config'), name).get('port', -1), 'i2c', name)
+        address = number(config.get('i2c_addr', config.get('addr', 0x68)), 'number', name)
+        if port < 0 or not 0 <= address <= 0x7f:
+            raise BoardResourceError(f'{name}: invalid IMU port or 7-bit address')
+        out.add('i2c_addr', port, address)
+        out.pins(config, ('int_gpio_num', 'sdo_gpio_num'), name)
+        out.devices.append((name, kind))
         return
     config = mapping(item.get('config'), name)
     subtype = item.get('sub_type', '')

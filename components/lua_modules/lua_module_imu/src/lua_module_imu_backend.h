@@ -6,17 +6,16 @@
  * Per-chip backend interface for the lua_module_imu module.
  *
  * Each supported IMU chip (BMI270 / ICM42670 / MPU6050 / ...) lives under
- * src/<chip>/ and exports a single `lua_imu_backend_t` instance named
- * `lua_imu_backend`. The main glue file talks to chips only via this table.
+ * src/<chip>/ and exports a single `lua_imu_backend_t` instance selected by chip name. The main glue file talks to chips only via this table.
  */
 
 #pragma once
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 
 #include "esp_err.h"
-#include "i2c_bus.h"
 #include "driver/i2c_master.h"
 
 #ifdef __cplusplus
@@ -36,6 +35,7 @@ typedef struct {
     i2c_master_bus_handle_t master_bus;
     uint32_t frequency;
     uint8_t i2c_addr;
+    void *sensor;
     void *state;
 } lua_imu_backend_ctx_t;
 
@@ -48,7 +48,7 @@ typedef struct {
 typedef struct {
     lua_imu_axes_t accel;
     lua_imu_axes_t gyro;
-    int64_t sens_time;   /*!< microseconds; backend may fill from sensor or wall-clock */
+    int64_t sens_time;   /*!< Sensor ticks for BMI270; microseconds otherwise. */
     uint32_t status;     /*!< chip-specific status bits */
 } lua_imu_sample_t;
 
@@ -85,7 +85,9 @@ typedef struct {
     int (*sdo_level_for_addr)(uint8_t i2c_addr);
 } lua_imu_backend_t;
 
-extern const lua_imu_backend_t lua_imu_backend;
+extern const lua_imu_backend_t lua_imu_backend_bmi270;
+extern const lua_imu_backend_t lua_imu_backend_icm42670;
+extern const lua_imu_backend_t lua_imu_backend_mpu6050;
 
 /**
  * @brief (Re)create the per-device I2C handle inside `ctx` for `i2c_addr`.

@@ -65,7 +65,7 @@ Do not add new top-level source directories without updating this spec and the b
 
 ## README.md Rules
 
-`README.md` is the required module document. It is the module-level contract, similar to a C header for people and models.
+`README.md` is the required module document. It must describe the module for users and AI to develop with.
 
 It must describe:
 
@@ -79,6 +79,7 @@ Rules:
 
 - Document only APIs and libraries that actually exist.
 - Do not describe planned or unimplemented functions.
+- Do not describe unnecessary internal implementation details.
 - Keep examples short and directly runnable when possible.
 - For hardware modules, include close/deinit requirements and safe GPIO guidance.
 

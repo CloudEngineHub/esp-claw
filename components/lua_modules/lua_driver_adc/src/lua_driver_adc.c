@@ -6,7 +6,6 @@
 #include "lua_driver_adc.h"
 
 #include <stdbool.h>
-#include <stdio.h>
 #include <string.h>
 
 #include "cap_lua.h"
@@ -75,8 +74,7 @@ static esp_err_t lua_driver_adc_acquire_channel(lua_State *L, int gpio, adc_unit
     }
     if (s_units[unit_id] == NULL) {
         char key[CLAW_HW_KEY_SIZE];
-        snprintf(key, sizeof(key), "adc_unit:%d", unit_id);
-        const char *keys[] = { key };
+        const char *keys[] = { claw_hw_key_adc_unit(key, sizeof(key), unit_id) };
         err = cap_lua_hw_claim(L, &s_unit_leases[unit_id], "lua/adc-unit", keys, 1);
         if (err != ESP_OK) {
             xSemaphoreGive(s_units_lock);
@@ -273,9 +271,10 @@ static int lua_driver_adc_new(lua_State *L)
     lua_setmetatable(L, -2);
 
     char key_buf[2][32];
-    snprintf(key_buf[0], sizeof(key_buf[0]), "gpio:%d", gpio);
-    snprintf(key_buf[1], sizeof(key_buf[1]), "adc_channel:%d:%d", unit_id, channel);
-    const char *keys[] = { key_buf[0], key_buf[1] };
+    const char *keys[] = {
+        claw_hw_key_gpio(key_buf[0], sizeof(key_buf[0]), gpio),
+        claw_hw_key_adc_channel(key_buf[1], sizeof(key_buf[1]), unit_id, channel),
+    };
     err = cap_lua_hw_claim(L, &ud->lease, "lua/adc-channel", keys, 2);
     if (err != ESP_OK) return luaL_error(L, "adc claim failed: %s", esp_err_to_name(err));
     err = lua_driver_adc_acquire_channel(L, gpio, unit_id, channel, atten, bitwidth, &ud->unit);

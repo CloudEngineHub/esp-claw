@@ -5,7 +5,6 @@
  */
 #include "app_claw_hw_bridge.h"
 
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "driver/gpio.h"
@@ -132,7 +131,7 @@ static esp_err_t catalog_add_resource(bridge_catalog_t *catalog, app_claw_hw_res
     case APP_CLAW_HW_GPIO:
         if (a < 0 || a >= GPIO_NUM_MAX || !GPIO_IS_VALID_GPIO(a)) return ESP_ERR_INVALID_ARG;
         result = claw_hw_key_gpio(key, sizeof(key), a); break;
-    case APP_CLAW_HW_I2C_BUS: result = claw_hw_key_i2c_bus(key, sizeof(key), a); break;
+    case APP_CLAW_HW_I2C_BUS: result = claw_hw_key_i2c_controller(key, sizeof(key), a); break;
     case APP_CLAW_HW_I2C_ADDR: result = claw_hw_key_i2c_addr(key, sizeof(key), a, b); break;
     case APP_CLAW_HW_I2S_BUS: result = claw_hw_key_i2s_bus(key, sizeof(key), a); break;
     case APP_CLAW_HW_SPI_BUS: result = claw_hw_key_spi_bus(key, sizeof(key), a); break;
@@ -141,18 +140,19 @@ static esp_err_t catalog_add_resource(bridge_catalog_t *catalog, app_claw_hw_res
     case APP_CLAW_HW_ADC_CHANNEL: result = claw_hw_key_adc_channel(key, sizeof(key), a, b); break;
     case APP_CLAW_HW_LEDC_TIMER: result = claw_hw_key_ledc_timer(key, sizeof(key), a, b); break;
     case APP_CLAW_HW_LEDC_CHANNEL: result = claw_hw_key_ledc_channel(key, sizeof(key), a, b); break;
-    case APP_CLAW_HW_SDMMC_SLOT:
-    case APP_CLAW_HW_DSI_BUS:
-    case APP_CLAW_HW_LDO_CHANNEL: {
-        if (a < 0) return ESP_ERR_INVALID_ARG;
-        const char *prefix = kind == APP_CLAW_HW_SDMMC_SLOT ? "sdmmc_slot" : kind == APP_CLAW_HW_DSI_BUS ? "dsi_bus" : "ldo_channel";
-        int length = snprintf(key, sizeof(key), "%s:%d", prefix, a);
-        if (length > 0 && length < sizeof(key)) result = key;
-        break;
-    }
+    case APP_CLAW_HW_SDMMC_SLOT: result = claw_hw_key_sdmmc_slot(key, sizeof(key), a); break;
+    case APP_CLAW_HW_DSI_BUS: result = claw_hw_key_dsi_bus(key, sizeof(key), a); break;
+    case APP_CLAW_HW_LDO_CHANNEL: result = claw_hw_key_ldo_channel(key, sizeof(key), a); break;
     default: return ESP_ERR_INVALID_ARG;
     }
     return catalog_add(catalog, result, CLAW_HW_EXCLUSIVE);
+}
+
+static esp_err_t catalog_add_device(bridge_catalog_t *catalog, const app_claw_hw_group_t *group)
+{
+    if (!group->device) return ESP_OK;
+    char key[CLAW_HW_KEY_SIZE];
+    return catalog_add(catalog, claw_hw_key_device(key, sizeof(key), group->name), CLAW_HW_EXCLUSIVE);
 }
 
 #define ADD(kind, a, b) do { \
@@ -219,13 +219,13 @@ static esp_err_t build_catalog(bridge_catalog_t *catalog)
     for (size_t i = 0; i < board->group_count; ++i) {
         const app_claw_hw_group_t *group = &board->groups[i];
         for (size_t j = 0; j < group->resource_count; ++j) {
+            /* I2C addresses are checked when the device claims them. */
+            if (group->resources[j].kind == APP_CLAW_HW_I2C_ADDR) continue;
             esp_err_t err = add_board_resource(catalog, &group->resources[j]);
             if (err != ESP_OK) return err;
         }
-        if (group->access[0]) {
-            esp_err_t err = catalog_add(catalog, group->access, group->device ? CLAW_HW_EXCLUSIVE : CLAW_HW_SHARED);
-            if (err != ESP_OK) return err;
-        }
+        esp_err_t err = catalog_add_device(catalog, group);
+        if (err != ESP_OK) return err;
     }
     return ESP_OK;
 }
@@ -253,13 +253,8 @@ esp_err_t app_claw_hw_bridge_init(claw_hw_registry_handle_t registry)
     if (!catalog) { free(bridge); return ESP_ERR_NO_MEM; }
     esp_err_t err = build_catalog(catalog);
     if (err == ESP_OK) {
-        size_t count = 0;
-        for (size_t i = 0; i < catalog->count; ++i) {
-            /* I2C addresses are checked when the device claims them. */
-            if (strncmp(catalog->names[i], "i2c_addr:", 9) != 0) catalog->resources[count++] = catalog->resources[i];
-        }
-        err = claw_hw_registry_register(registry, catalog->resources, count);
-        if (err == ESP_OK) ESP_LOGI(TAG, "Registered %u resources", (unsigned)count);
+        err = claw_hw_registry_register(registry, catalog->resources, catalog->count);
+        if (err == ESP_OK) ESP_LOGI(TAG, "Registered %u resources", (unsigned)catalog->count);
     }
     catalog_delete(catalog);
     if (err != ESP_OK) { free(bridge); return err; }
@@ -286,7 +281,7 @@ static esp_err_t claim_group(const app_claw_hw_group_t *group)
     if (!catalog) return ESP_ERR_NO_MEM;
     esp_err_t err = ESP_OK;
     for (size_t i = 0; i < group->resource_count && err == ESP_OK; ++i) err = add_board_resource(catalog, &group->resources[i]);
-    if (err == ESP_OK && group->board_owned) err = catalog_add(catalog, group->access, CLAW_HW_EXCLUSIVE);
+    if (err == ESP_OK && group->board_owned) err = catalog_add_device(catalog, group);
     if (err == ESP_OK && catalog->count) {
         const claw_hw_claim_config_t claim = {.owner = group->name, .resources = catalog->names, .resource_count = catalog->count};
         err = claw_hw_registry_claim(s_bridge->registry, &claim, &usage->claim);
@@ -322,10 +317,13 @@ esp_err_t app_claw_hw_driver_deinit(const char *name, bool device, esp_err_t (*d
 {
     if (!s_bridge) return ESP_ERR_INVALID_STATE;
     const app_claw_hw_group_t *group = find_group(name, device);
-    if (group && group->access[0] && !group->board_owned) {
+    if (group && group->device && !group->board_owned) {
+        char key[CLAW_HW_KEY_SIZE];
+        const char *access = claw_hw_key_device(key, sizeof(key), group->name);
+        if (!access) return ESP_ERR_INVALID_ARG;
         size_t count = 0;
         claw_hw_entry_t entry;
-        esp_err_t err = claw_hw_registry_query(s_bridge->registry, group->access, &entry, 1, &count);
+        esp_err_t err = claw_hw_registry_query(s_bridge->registry, access, &entry, 1, &count);
         if (err == ESP_ERR_INVALID_SIZE || (err == ESP_OK && entry.users)) return ESP_ERR_INVALID_STATE;
     }
     esp_err_t err = deinit(handle);

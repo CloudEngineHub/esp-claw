@@ -40,7 +40,6 @@ typedef struct {
     size_t group; /* Codec/I2S aliases share one physical claim. */
     const app_claw_hw_resource_t *resources;
     size_t resource_count;
-    const char *access;
     bool board_owned;
 } app_claw_hw_group_t;
 

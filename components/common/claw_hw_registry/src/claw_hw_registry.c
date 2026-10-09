@@ -76,7 +76,7 @@ static esp_err_t i2c_parent(claw_hw_registry_handle_t h, const char *key, size_t
     char canonical[CLAW_HW_KEY_SIZE];
     claw_hw_key_i2c_addr(canonical, sizeof(canonical), (int)port, (int)address);
     if (strcmp(key, canonical) != 0) return ESP_ERR_INVALID_ARG;
-    claw_hw_key_i2c_bus(canonical, sizeof(canonical), (int)port);
+    claw_hw_key_i2c_controller(canonical, sizeof(canonical), (int)port);
     size_t slot = find_resource(h, canonical);
     if (slot == SIZE_MAX) return ESP_ERR_NOT_FOUND;
     *parent = slot + 1;
@@ -456,7 +456,7 @@ const char *claw_hw_key_uart_bus(char *buf, size_t size, int port)
     return format_key(buf, size, port >= 0, "uart_bus:%d", port);
 }
 
-const char *claw_hw_key_i2c_bus(char *buf, size_t size, int port)
+const char *claw_hw_key_i2c_controller(char *buf, size_t size, int port)
 {
     return format_key(buf, size, port >= 0, "i2c_bus:%d", port);
 }
@@ -501,7 +501,17 @@ const char *claw_hw_key_device(char *buf, size_t size, const char *name)
     return format_key(buf, size, valid_text(name, CLAW_HW_KEY_SIZE), "device:%s", name);
 }
 
-const char *claw_hw_key_bus(char *buf, size_t size, const char *name)
+const char *claw_hw_key_sdmmc_slot(char *buf, size_t size, int slot)
 {
-    return format_key(buf, size, valid_text(name, CLAW_HW_KEY_SIZE), "bus:%s", name);
+    return format_key(buf, size, slot >= 0, "sdmmc_slot:%d", slot);
+}
+
+const char *claw_hw_key_dsi_bus(char *buf, size_t size, int bus)
+{
+    return format_key(buf, size, bus >= 0, "dsi_bus:%d", bus);
+}
+
+const char *claw_hw_key_ldo_channel(char *buf, size_t size, int channel)
+{
+    return format_key(buf, size, channel >= 0, "ldo_channel:%d", channel);
 }

@@ -522,8 +522,7 @@ static int lua_driver_touch_new(lua_State *L)
     char (*key_buf)[CLAW_HW_KEY_SIZE] = lua_newuserdata(L, (size_t)cfg.key_count * sizeof(*key_buf));
     const char **keys = lua_newuserdata(L, (size_t)cfg.key_count * sizeof(*keys));
     for (int i = 0; i < cfg.key_count; ++i) {
-        snprintf(key_buf[i], sizeof(key_buf[i]), "gpio:%d", cfg.gpio_num[i]);
-        keys[i] = key_buf[i];
+        keys[i] = claw_hw_key_gpio(key_buf[i], sizeof(key_buf[i]), cfg.gpio_num[i]);
     }
     esp_err_t err = cap_lua_hw_claim(L, &ud->lease, "lua/touch", keys, cfg.key_count);
     lua_pop(L, 2);

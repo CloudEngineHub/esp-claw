@@ -11,7 +11,7 @@ on the same bus.
   - `sda`, `scl`: GPIO numbers for SDA and SCL
   - `freq_hz`: optional clock frequency in Hz, default `400000`
 - Borrow a board-initialized bus with `local bus = i2c.borrow(0)`
-  - The board must publish the shared bus; borrowing does not initialize or reconfigure its controller or pins
+  - The board must initialize the bus and keep it alive throughout Lua use; borrowing does not initialize or reconfigure its controller or pins. Do not borrow a bus created by `i2c.new()`; reuse its Lua handle instead
   - The borrowed Lua handle defaults to `400000` Hz for new devices; use `bus:device(addr, clk_speed)` to choose another device speed
 - Scan the bus for devices with `local addrs = bus:scan()`
   - Returns a Lua array of 7-bit addresses that ACKed
@@ -25,8 +25,8 @@ on the same bus.
   - `dev:write(data [, mem_addr])` where `data` is a string or a table of bytes
   - `dev:address()` → the 7-bit address
 - Close handles when you're done with `dev:close()` and `bus:close()`.
-  **Always close every device before closing its bus.** Closing a bus with live devices fails. Closing a borrowed bus releases only that borrow; the board bus remains initialized.
-  Unreachable handles are finalized by Lua GC; job exit closes remaining handles. Each device keeps its bus alive until the device closes. Retry a failed explicit close before dropping the handle.
+  **Always close every device before closing its bus.** Closing a bus with live devices fails. Closing a borrowed handle leaves the board bus initialized.
+  Unreachable handles are finalized by Lua GC; job exit closes remaining handles. Each device keeps its Lua bus handle alive until the device closes. Retry a failed explicit close before dropping the handle.
 
 `i2c.new()` claims the controller and pins exclusively; it cannot reuse a board-initialized controller. Each device separately claims its address, so borrowing a bus does not bypass an existing address claim. A board IMU holds its address from Board Manager initialization until device deinitialization. Closing a Lua handle does not release that board-owned address; an uninitialized device does not reserve it.
 
@@ -81,4 +81,4 @@ dev:write("\x01\x02\x03")
 dev:write({0xA0, 0x55, 0xAA}, 0x10)
 ```
 
-I2C 地址不预注册。设备创建时按总线和地址申请独占占用，关闭后删除地址记录；共享总线借用仍通过已注册入口取得使用权。
+I2C addresses are claimed exclusively when devices are opened and released when they close. Borrowing a board bus does not claim its controller.

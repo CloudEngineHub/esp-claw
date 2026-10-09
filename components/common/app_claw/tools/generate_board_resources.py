@@ -76,7 +76,6 @@ class Resource:
 class BoardResources:
     resources: list[Resource] = field(default_factory=list)
     devices: list[tuple[str, str]] = field(default_factory=list)
-    i2c_buses: list[tuple[str, int]] = field(default_factory=list)
     ignored_custom: list[str] = field(default_factory=list)
     groups: list = field(default_factory=list)
 
@@ -139,8 +138,6 @@ def parse_peripheral(out, item):
             raise BoardResourceError(f'{name}: auto-selected {kind} port cannot be reserved statically')
         out.add(f'{kind}_bus', port)
         out.pins(pins, ('sda', 'scl') if kind == 'i2c' else ('mclk', 'bclk', 'ws', 'dout', 'dout2', 'din', 'clk', 'din0', 'din1', 'din2', 'din3'), name)
-        if kind == 'i2c':
-            out.i2c_buses.append((name, port))
     elif kind == 'spi':
         bus = mapping(config.get('spi_bus_config'), name)
         host = number(bus.get('spi_port', config.get('spi_port', 0)), 'spi', f'{name}.spi_port')
@@ -188,8 +185,7 @@ def i2c_addresses(out, item, peripherals):
             continue
         port = number(mapping(peripheral.get('config'), name).get('port', -1), 'i2c', name)
         if kind == 'camera':
-            # SCCB probes addresses dynamically; do not lend this physical bus.
-            out.i2c_buses[:] = [(name, bus_port) for name, bus_port in out.i2c_buses if bus_port != port]
+            # SCCB probes addresses dynamically.
             continue
         if kind == 'audio_codec':
             values = reference.get('address', 0x30)
@@ -369,12 +365,6 @@ def parse_board(board_dir):
                 aliases[alias] = group
             board.groups.append((item['name'], is_device, group, part))
             board.devices.extend(part.devices)
-            board.i2c_buses.extend(part.i2c_buses)
-    # Camera SCCB address probing is not described by standard YAML.
-    for item in devices.values():
-        if item.get('type') == 'camera':
-            names = {r.get('name') for r in peripheral_refs(item)}
-            board.i2c_buses[:] = [(n, p) for n, p in board.i2c_buses if n not in names]
     return board
 
 
@@ -389,9 +379,8 @@ def render(board):
                 lines.append(f'    {{APP_CLAW_HW_{kind}, {r.a}, {r.b}}},')
             lines.append('};')
         resources = f'resources_{group}' if part.resources else 'NULL'
-        access = f'device:{name}' if device else next((f'bus:i2c{port}' for n, port in board.i2c_buses if n == name), '')
         board_owned = device and any(kind in ('display_lcd', 'lcd_touch') for _, kind in part.devices)
-        rows.append(f'    {{{json.dumps(name)}, {str(device).lower()}, {group}, {resources}, {len(part.resources)}, {json.dumps(access)}, {str(board_owned).lower()}}},')
+        rows.append(f'    {{{json.dumps(name)}, {str(device).lower()}, {group}, {resources}, {len(part.resources)}, {str(board_owned).lower()}}},')
     if rows:
         lines.extend(['static const app_claw_hw_group_t groups[] = {', *rows, '};'])
     lines.append(f'const app_claw_hw_board_config_t app_claw_hw_generated_board = {{{"groups" if rows else "NULL"}, {len(rows)}}};')

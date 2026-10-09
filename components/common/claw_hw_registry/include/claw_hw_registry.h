@@ -55,10 +55,11 @@ esp_err_t claw_hw_registry_release(claw_hw_registry_handle_t handle, claw_hw_cla
 /* NULL resource selects all. Insufficient capacity returns the required count without writing entries. */
 esp_err_t claw_hw_registry_query(claw_hw_registry_handle_t handle, const char *resource, claw_hw_entry_t *entries, size_t capacity, size_t *count);
 
-/* Builders return NULL and clear buf on invalid arguments or truncation. */
+/* Always use these builders for keys; do not hard-code or format keys at call sites.
+ * Builders return NULL and clear buf on invalid arguments or truncation. */
 const char *claw_hw_key_gpio(char *buf, size_t size, int pin);
 const char *claw_hw_key_uart_bus(char *buf, size_t size, int port);
-const char *claw_hw_key_i2c_bus(char *buf, size_t size, int port);
+const char *claw_hw_key_i2c_controller(char *buf, size_t size, int port);
 const char *claw_hw_key_i2c_addr(char *buf, size_t size, int port, int address);
 const char *claw_hw_key_spi_bus(char *buf, size_t size, int host);
 const char *claw_hw_key_i2s_bus(char *buf, size_t size, int port);
@@ -66,8 +67,10 @@ const char *claw_hw_key_adc_unit(char *buf, size_t size, int unit);
 const char *claw_hw_key_adc_channel(char *buf, size_t size, int unit, int channel);
 const char *claw_hw_key_ledc_timer(char *buf, size_t size, int mode, int timer);
 const char *claw_hw_key_ledc_channel(char *buf, size_t size, int mode, int channel);
+const char *claw_hw_key_sdmmc_slot(char *buf, size_t size, int slot);
+const char *claw_hw_key_dsi_bus(char *buf, size_t size, int bus);
+const char *claw_hw_key_ldo_channel(char *buf, size_t size, int channel);
 const char *claw_hw_key_device(char *buf, size_t size, const char *name);
-const char *claw_hw_key_bus(char *buf, size_t size, const char *name);
 
 #ifdef __cplusplus
 }

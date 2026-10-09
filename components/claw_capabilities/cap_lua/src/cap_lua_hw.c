@@ -5,7 +5,6 @@
  */
 #include "cap_lua_hw.h"
 
-#include <stdio.h>
 #include <pthread.h>
 #include "lauxlib.h"
 #include "esp_timer.h"
@@ -46,11 +45,9 @@ esp_err_t cap_lua_hw_release(cap_lua_hw_lease_t *lease)
 
 esp_err_t cap_lua_hw_claim_gpio(lua_State *L, cap_lua_hw_lease_t *lease, const char *owner, int gpio)
 {
-    if (gpio < 0) return ESP_ERR_INVALID_ARG;
     char key[CLAW_HW_KEY_SIZE];
-    int n = snprintf(key, sizeof(key), "gpio:%d", gpio);
-    if (n < 0 || n >= sizeof(key)) return ESP_ERR_INVALID_SIZE;
-    const char *keys[] = { key };
+    const char *keys[] = { claw_hw_key_gpio(key, sizeof(key), gpio) };
+    if (!keys[0]) return ESP_ERR_INVALID_ARG;
     return cap_lua_hw_claim(L, lease, owner, keys, 1);
 }
 

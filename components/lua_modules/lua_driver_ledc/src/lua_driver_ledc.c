@@ -19,7 +19,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "cap_lua_hw.h"
-#include <stdio.h>
 #include "driver/gpio.h"
 
 #define LUA_DRIVER_LEDC_METATABLE "ledc"
@@ -114,8 +113,7 @@ static esp_err_t lua_driver_ledc_acquire_timer(lua_State *L, lua_driver_ledc_ud_
         lua_driver_ledc_timer_slot_t *slot = &s_timer_slots[i];
         if (slot->in_use) continue;
         char key[CLAW_HW_KEY_SIZE];
-        snprintf(key, sizeof(key), "ledc_timer:%d:%d", ud->speed_mode, i);
-        const char *keys[] = { key };
+        const char *keys[] = { claw_hw_key_ledc_timer(key, sizeof(key), ud->speed_mode, i) };
         err = cap_lua_hw_claim(L, &slot->lease, "lua/ledc-timer", keys, 1);
         if (err != ESP_OK) continue;
         slot->in_use = true;
@@ -253,11 +251,10 @@ static void lua_driver_ledc_parse_config(lua_State *L, int idx, lua_driver_ledc_
 static esp_err_t lua_driver_ledc_create(lua_State *L, lua_driver_ledc_ud_t *ud)
 {
     char key_buf[2][32];
-    snprintf(key_buf[0], sizeof(key_buf[0]), "gpio:%d", ud->gpio);
-    const char *keys[] = { key_buf[0], key_buf[1] };
+    const char *keys[] = { claw_hw_key_gpio(key_buf[0], sizeof(key_buf[0]), ud->gpio), NULL };
     esp_err_t err = ESP_ERR_NOT_FOUND;
     for (int i = 0; i < LEDC_CHANNEL_MAX; ++i) {
-        snprintf(key_buf[1], sizeof(key_buf[1]), "ledc_channel:%d:%d", ud->speed_mode, i);
+        keys[1] = claw_hw_key_ledc_channel(key_buf[1], sizeof(key_buf[1]), ud->speed_mode, i);
         err = cap_lua_hw_claim(L, &ud->lease, "lua/ledc-channel", keys, 2);
         if (err == ESP_OK) { ud->channel = i; break; }
     }

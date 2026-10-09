@@ -300,7 +300,8 @@ static int lua_module_camera_open(lua_State *L)
 
     cap_lua_hw_lease_t *lease = lua_camera_lease(L, true);
     if (!lease->id) {
-        const char *keys[] = { "device:camera" };
+        char key[CLAW_HW_KEY_SIZE];
+        const char *keys[] = { claw_hw_key_device(key, sizeof(key), "camera") };
         err = cap_lua_hw_claim(L, lease, "lua/camera", keys, 1);
         if (err != ESP_OK) return luaL_error(L, "camera claim failed: %s", esp_err_to_name(err));
     }

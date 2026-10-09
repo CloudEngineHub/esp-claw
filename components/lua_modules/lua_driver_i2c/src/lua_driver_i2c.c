@@ -6,7 +6,6 @@
 #include "lua_driver_i2c.h"
 
 #include <stdint.h>
-#include <stdio.h>
 #include <string.h>
 
 #include "cap_lua.h"
@@ -167,8 +166,7 @@ static int lua_driver_i2c_bus_device(lua_State *L)
     luaL_getmetatable(L, LUA_DRIVER_I2C_DEVICE_METATABLE);
     lua_setmetatable(L, -2);
     char key[CLAW_HW_KEY_SIZE];
-    snprintf(key, sizeof(key), "i2c_addr:%d:%02x", ud->port, (unsigned)addr);
-    const char *keys[] = { key };
+    const char *keys[] = { claw_hw_key_i2c_addr(key, sizeof(key), ud->port, (int)addr) };
     esp_err_t err = cap_lua_hw_claim(L, &dud->lease, "lua/i2c-device", keys, 1);
     if (err != ESP_OK) return luaL_error(L, "i2c address claim failed: %s", esp_err_to_name(err));
     /* Keep the bus alive while this device uses it. */
@@ -347,10 +345,11 @@ static int lua_driver_i2c_new(lua_State *L)
     luaL_getmetatable(L, LUA_DRIVER_I2C_BUS_METATABLE);
     lua_setmetatable(L, -2);
     char keys_buf[3][24];
-    snprintf(keys_buf[0], sizeof(keys_buf[0]), "i2c_bus:%d", (int)port);
-    snprintf(keys_buf[1], sizeof(keys_buf[1]), "gpio:%d", (int)sda);
-    snprintf(keys_buf[2], sizeof(keys_buf[2]), "gpio:%d", (int)scl);
-    const char *keys[] = { keys_buf[0], keys_buf[1], keys_buf[2] };
+    const char *keys[] = {
+        claw_hw_key_i2c_controller(keys_buf[0], sizeof(keys_buf[0]), (int)port),
+        claw_hw_key_gpio(keys_buf[1], sizeof(keys_buf[1]), (int)sda),
+        claw_hw_key_gpio(keys_buf[2], sizeof(keys_buf[2]), (int)scl),
+    };
     esp_err_t err = cap_lua_hw_claim(L, &ud->lease, "lua/i2c-bus", keys, 3);
     if (err != ESP_OK) return luaL_error(L, "i2c bus claim failed: %s", esp_err_to_name(err));
     i2c_master_bus_handle_t existing = NULL;
@@ -374,13 +373,8 @@ static int lua_driver_i2c_borrow(lua_State *L)
     *ud = (lua_driver_i2c_bus_ud_t) { .port = port, .external_owned = true, .frequency = LUA_DRIVER_I2C_DEFAULT_FREQ_HZ };
     luaL_getmetatable(L, LUA_DRIVER_I2C_BUS_METATABLE);
     lua_setmetatable(L, -2);
-    char key[CLAW_HW_KEY_SIZE];
-    snprintf(key, sizeof(key), "bus:i2c%d", port);
-    const char *keys[] = { key };
-    esp_err_t err = cap_lua_hw_claim(L, &ud->lease, "lua/i2c-borrow", keys, 1);
-    if (err != ESP_OK) return luaL_error(L, "i2c borrow failed: %s", esp_err_to_name(err));
-    /* Borrow the provider's driver without reconfiguring its pins. */
-    err = i2c_master_get_bus_handle(port, &ud->bus);
+    /* The board keeps this bus alive throughout Lua use. */
+    esp_err_t err = i2c_master_get_bus_handle(port, &ud->bus);
     if (err != ESP_OK || !ud->bus) {
         (void)lua_driver_i2c_bus_release(ud);
         return luaL_error(L, "I2C provider has no initialized bus");

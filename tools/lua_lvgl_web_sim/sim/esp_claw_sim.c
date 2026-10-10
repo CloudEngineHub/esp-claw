@@ -922,11 +922,28 @@ static int lua_true_noop(lua_State *L)
     return 1;
 }
 
+/* No physical button events are generated in the browser. */
+static int lua_button_on(lua_State *L)
+{
+    luaL_checktype(L, 1, LUA_TTABLE);
+    luaL_checkstring(L, 2);
+    luaL_checktype(L, 3, LUA_TFUNCTION);
+    return lua_true_noop(L);
+}
+
+static int lua_button_dispatch(lua_State *L)
+{
+    lua_pushinteger(L, 0);
+    return 1;
+}
+
 static int luaopen_button(lua_State *L)
 {
     static const luaL_Reg funcs[] = {
         {"new", lua_button_new},
         {"get_key_level", lua_button_get_key_level},
+        {"on", lua_button_on},
+        {"dispatch", lua_button_dispatch},
         {"close", lua_true_noop},
         {"off", lua_true_noop},
         {NULL, NULL},
@@ -936,29 +953,102 @@ static int luaopen_button(lua_State *L)
     return 1;
 }
 
-static int lua_imu_read(lua_State *L)
+static void lua_imu_check_open(lua_State *L)
 {
     luaL_checktype(L, 1, LUA_TTABLE);
+    lua_getfield(L, 1, "closed");
+    bool closed = lua_toboolean(L, -1);
+    lua_pop(L, 1);
+    luaL_argcheck(L, !closed, 1, "closed IMU handle");
+}
+
+static int lua_imu_close(lua_State *L)
+{
+    luaL_checktype(L, 1, LUA_TTABLE);
+    lua_pushboolean(L, true);
+    lua_setfield(L, 1, "closed");
+    return 0;
+}
+
+static int lua_imu_name(lua_State *L)
+{
+    lua_imu_check_open(L);
+    lua_getfield(L, 1, "sensor_name");
+    return 1;
+}
+
+static int lua_imu_zero(lua_State *L)
+{
+    lua_imu_check_open(L);
+    lua_pushinteger(L, 0);
+    return 1;
+}
+
+static int lua_imu_read(lua_State *L)
+{
+    lua_imu_check_open(L);
     lua_newtable(L);
-    lua_newtable(L);
-    lua_pushnumber(L, 0.0);
-    lua_setfield(L, -2, "x");
-    lua_pushnumber(L, 0.0);
-    lua_setfield(L, -2, "y");
-    lua_pushnumber(L, 1.0);
-    lua_setfield(L, -2, "z");
-    lua_setfield(L, -2, "accel");
+    /* Stationary raw sample at 16384 LSB/g; no physical sensor is accessed. */
+    const char *axes[] = {"accel", "gyro"};
+    for (int i = 0; i < 2; ++i) {
+        lua_newtable(L);
+        lua_pushinteger(L, 0);
+        lua_setfield(L, -2, "x");
+        lua_pushinteger(L, 0);
+        lua_setfield(L, -2, "y");
+        lua_pushinteger(L, i == 0 ? 16384 : 0);
+        lua_setfield(L, -2, "z");
+        lua_setfield(L, -2, axes[i]);
+    }
+    lua_pushinteger(L, (lua_Integer)(emscripten_get_now() * 1000));
+    lua_setfield(L, -2, "sens_time");
+    lua_pushinteger(L, 0);
+    lua_setfield(L, -2, "status");
     return 1;
 }
 
 static int lua_imu_new(lua_State *L)
 {
-    (void)L;
+    luaL_argcheck(L, lua_gettop(L) == 1, 1, "expected one configuration table");
+    luaL_checktype(L, 1, LUA_TTABLE);
+    lua_getfield(L, 1, "device");
+    bool board = !lua_isnil(L, -1);
+    if (!board) {
+        lua_pop(L, 1);
+        lua_getfield(L, 1, "chip");
+    }
+    luaL_checktype(L, -1, LUA_TSTRING);
+    const char *name = lua_tostring(L, -1);
+    luaL_argcheck(L, name[0], 1, "empty sensor name");
+    if (!board && strcmp(name, "bmi270") && strcmp(name, "icm42670") && strcmp(name, "mpu6050")) {
+        return luaL_error(L, "imu.new: unsupported chip");
+    }
+    lua_pushnil(L);
+    while (lua_next(L, 1)) {
+        const char *key = lua_type(L, -2) == LUA_TSTRING ? lua_tostring(L, -2) : NULL;
+        bool valid = key && (board ? strcmp(key, "device") == 0 :
+            strcmp(key, "chip") == 0 || strcmp(key, "bus") == 0 || strcmp(key, "address") == 0 ||
+            strcmp(key, "int_gpio") == 0 || strcmp(key, "sdo_gpio") == 0);
+        if (!valid) return luaL_error(L, "imu.new: unsupported or mixed config fields");
+        lua_pop(L, 1);
+    }
+    if (!board) {
+        lua_getfield(L, 1, "bus");
+        luaL_checktype(L, -1, LUA_TTABLE);
+        lua_pop(L, 1);
+    }
+    static const luaL_Reg methods[] = {
+        {"read", lua_imu_read},
+        {"read_temperature", lua_imu_zero},
+        {"read_int_status", lua_imu_zero},
+        {"name", lua_imu_name},
+        {"close", lua_imu_close},
+        {NULL, NULL},
+    };
     lua_newtable(L);
-    lua_pushcfunction(L, lua_imu_read);
-    lua_setfield(L, -2, "read");
-    lua_pushcfunction(L, lua_true_noop);
-    lua_setfield(L, -2, "close");
+    luaL_setfuncs(L, methods, 0);
+    lua_pushstring(L, name);
+    lua_setfield(L, -2, "sensor_name");
     return 1;
 }
 
@@ -1032,6 +1122,8 @@ static int lua_i2c_new(lua_State *L)
 static int luaopen_i2c(lua_State *L)
 {
     lua_newtable(L);
+    lua_pushcfunction(L, lua_i2c_new);
+    lua_setfield(L, -2, "borrow");
     lua_pushcfunction(L, lua_i2c_new);
     lua_setfield(L, -2, "new");
     return 1;

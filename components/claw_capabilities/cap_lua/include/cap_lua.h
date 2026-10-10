@@ -10,6 +10,7 @@
 #include <stdint.h>
 
 #include "claw_core.h"
+#include "claw_hw_registry.h"
 #include "esp_err.h"
 #include "lua.h"
 
@@ -108,9 +109,8 @@ size_t cap_lua_get_active_async_job_count(void);
  * outside any job context. Pointer stays valid for the job's lifetime. */
 const char *cap_lua_current_owner_tag(void);
 
-/* Wrapper around claw_hw_release_by_tag(); invoked automatically on job
- * exit after user-registered exit_cleanup callbacks. */
-void cap_lua_release_job_hw_leases(const char *owner_tag);
+/* Bind once before starting Lua jobs; the application owns the registry. */
+esp_err_t cap_lua_set_hw_registry(claw_hw_registry_handle_t registry);
 
 #ifdef __cplusplus
 }

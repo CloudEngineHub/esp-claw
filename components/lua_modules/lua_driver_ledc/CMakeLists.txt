@@ -1,9 +1,11 @@
 idf_component_register(
     SRCS
-        "src/lua_module_ledc.c"
+        "src/lua_driver_ledc.c"
     INCLUDE_DIRS
         "src"
     REQUIRES
         cap_lua
         esp_driver_ledc
+    PRIV_REQUIRES
+        esp_driver_gpio
 )

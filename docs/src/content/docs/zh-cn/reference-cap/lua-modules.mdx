@@ -65,6 +65,16 @@ import { LinkCard } from 'starlight-theme-nova/components'
     每个模块在 `edge_agent` 中受 Kconfig 条件编译控制，当固件中没有编译包含该模块的组件时，Lua 脚本中不允许使用该模块。
 </Aside>
 
+## 硬件占用与退出清理
+
+硬件对象通过统一注册表申请资源：未注册或独占资源已被占用时，打开操作失败。资源注册由板级和提供方完成，脚本只负责打开、使用和关闭对象。`i2c.new(...)` 创建自己的总线，`i2c.borrow(0)` 借用已初始化的板级总线；设备地址仍然独占，不能借此覆盖板载设备。
+
+当前 `lcd.new(...)`、`environmental_sensor.new(...)`、`magnetometer.new(...)` 和 `sci.new(...)` 尚未接入完整资源所有权管理，构造时会明确报错，即使启用了对应组件也不可用。此限制不影响通过 `display.open()` 使用板载屏幕。
+
+脚本退出时先停止硬件，再释放使用凭证。若硬件清理失败，运行时保留 Lua 状态及占用，并在后续任务开始时重试，避免其他任务接管仍然活动的硬件。可用 Console 的 `hwmap` 查看占用。
+
+运行时的 `debug` 库仅保留 `traceback` 和 `getinfo`；不开放修改注册表、元表、闭包或执行钩子的调试接口。
+
 ## 注册机制
 
 每个 `lua_module_*` / `lua_driver_*` 组件对外只暴露一个注册函数，命名规则为 `lua_module_<name>_register()` 或 `lua_driver_<name>_register()`：

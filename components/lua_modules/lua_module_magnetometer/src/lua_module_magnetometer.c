@@ -903,6 +903,8 @@ static void lua_mag_apply_lua_overrides(lua_State *L, int opts_idx, lua_mag_reso
 
 static int lua_mag_new(lua_State *L)
 {
+    return luaL_error(L, "lua_module_magnetometer: raw hardware creation is not supported until resource ownership is integrated");
+
     const char *device_name = LUA_MAG_DEFAULT_DEVICE;
     int opts_idx = 0;
 

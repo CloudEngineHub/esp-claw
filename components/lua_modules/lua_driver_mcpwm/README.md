@@ -36,7 +36,7 @@ Use available output-capable GPIOs. Duty must be finite and within `0..100`. Fre
 
 - Start, stop, and transitions from 0%/100% to intermediate duty can block for a PWM period plus scheduler delay. Frequency changes introduce an output gap; transitions are not guaranteed glitch-free or phase-continuous.
 - Hardware update failures may leave output stopped. If frequency changes successfully but restarting fails, the new frequency remains configured.
-- Use a handle within its owning Lua runtime. Call `close()` when finished; garbage collection provides fallback cleanup. Available groups and handles depend on the chip.
+- Use a handle within its owning Lua runtime. Call `close()` when finished; job shutdown provides fallback cleanup. Available groups and handles depend on the chip.
 
 ## Example
 
@@ -49,3 +49,5 @@ pwm:set_duty(2, 40)
 pwm:stop()
 pwm:close()
 ```
+
+Hardware GPIOs are claimed before configuration. Occupied or unavailable resources raise an error; `close()` releases ownership only after hardware cleanup succeeds. Failed cleanup retains ownership for retry.

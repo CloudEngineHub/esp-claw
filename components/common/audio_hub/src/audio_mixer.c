@@ -23,7 +23,6 @@
 #include "esp_err.h"
 #include "esp_log.h"
 
-#include "claw_hw_registry.h"
 #include "dev_audio_codec.h"
 #include "audio_memory.h"
 
@@ -31,7 +30,6 @@ static const char *TAG = "audio_mixer";
 
 #define AUDIO_MIXER_TASK_PRIO         10
 #define AUDIO_MIXER_TASK_STACK        4096
-#define AUDIO_MIXER_MIXER_OWNER_TAG   "mixer/system"
 #define AUDIO_MIXER_TRACK_ROLE_COUNT  2
 #define AUDIO_MIXER_CODEC_DEVICE_NAME "audio_dac"
 #define AUDIO_MIXER_RING_FRAMES       8
@@ -61,8 +59,6 @@ struct audio_mixer_t {
     audio_mixer_config_t       cfg;
     dev_audio_codec_handles_t *codec_handles;
     esp_codec_dev_handle_t     codec_dev;
-    claw_hw_lease_handle_t     dev_lease;
-    char                       device_key[48];
 
     esp_ae_mixer_handle_t      ae_mixer;
     esp_ae_mixer_info_t        src_info[AUDIO_MIXER_TRACK_ROLE_COUNT];
@@ -261,10 +257,6 @@ static void mixer_free_all(struct audio_mixer_t *m)
         esp_ae_mixer_close(m->ae_mixer);
         m->ae_mixer = NULL;
     }
-    if (m->dev_lease) {
-        claw_hw_release(m->dev_lease);
-        m->dev_lease = NULL;
-    }
     if (m->codec_dev) {
         esp_codec_dev_close(m->codec_dev);
         m->codec_dev = NULL;
@@ -318,19 +310,6 @@ esp_err_t audio_mixer_start(const audio_mixer_config_t *config,
         ESP_LOGE(TAG, "board device '%s' has no codec_dev handle", AUDIO_MIXER_CODEC_DEVICE_NAME);
         mixer_free_all(m);
         return ESP_ERR_INVALID_STATE;
-    }
-
-    (void)claw_hw_key_device(m->device_key, sizeof(m->device_key), AUDIO_MIXER_CODEC_DEVICE_NAME);
-    claw_hw_claim_config_t claim = {
-        .resource  = m->device_key,
-        .owner_tag = AUDIO_MIXER_MIXER_OWNER_TAG,
-        .mode      = CLAW_HW_MODE_EXCLUSIVE,
-    };
-    err = claw_hw_claim(&claim, &m->dev_lease);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "claim %s failed: 0x%x", m->device_key, (unsigned)err);
-        mixer_free_all(m);
-        return err;
     }
 
     esp_codec_dev_sample_info_t fs = {

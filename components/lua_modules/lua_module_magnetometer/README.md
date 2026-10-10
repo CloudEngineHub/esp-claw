@@ -1,5 +1,7 @@
 # Lua Magnetometer
 
+**Current availability:** `magnetometer.new(...)` returns an error until hardware resource ownership is integrated. Enabling this component does not enable construction; the examples below describe the API, not a currently runnable workflow.
+
 This module describes how to read magnetometer data from Lua.
 When a request mentions `bmm350`, `bmm150`, `magnetometer`, `magnetic field`, or `compass`,
 use this module by default. The active chip backend is selected at build time via

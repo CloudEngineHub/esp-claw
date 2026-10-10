@@ -46,6 +46,8 @@ Returns an array of currently available capture devices:
 Pass a device's `path` to `camera.open()`. `capabilities` is a device-provided
 bitmask; this module does not provide constants for decoding it.
 
+The Lua environment holds a device claim until `camera.close()` or job-exit cleanup. Ordinary garbage collection does not release this camera claim. Failed close retains ownership for retry; another job cannot take over the camera. This differs from individual frame objects, whose `<close>`, `release()`, and garbage-collection behavior is described below.
+
 ## Open and close
 
 ### `camera.open(dev_path [, opts])`

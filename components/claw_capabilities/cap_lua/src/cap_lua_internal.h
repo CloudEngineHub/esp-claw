@@ -49,6 +49,7 @@ bool cap_lua_run_path_is_valid(const char *path);
 esp_err_t cap_lua_resolve_run_path(const char *path, char *resolved, size_t resolved_size);
 
 esp_err_t cap_lua_runtime_init(void);
+claw_hw_registry_handle_t cap_lua_get_hw_registry(void);
 
 esp_err_t cap_lua_runtime_execute_file(const char *path,
                                        const char *args_json,

@@ -13,7 +13,7 @@ extern "C" {
 #endif
 
 int luaopen_ledc(lua_State *L);
-esp_err_t lua_module_ledc_register(void);
+esp_err_t lua_driver_ledc_register(void);
 
 #ifdef __cplusplus
 }

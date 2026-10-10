@@ -40,6 +40,7 @@
 static const char *TAG = "app_claw_cli";
 static const size_t CAP_OUTPUT_BUF_SIZE = 8192;
 
+static claw_hw_registry_handle_t s_hw_registry;
 static uint32_t s_next_request_id = 1;
 static char s_current_session_id[64] = "default";
 
@@ -336,58 +337,46 @@ static int cmd_ls(int argc, char **argv)
 }
 #endif
 
-/* `hwmap` — dump the claw_hw_registry state or query one resource. */
-typedef struct {
-    int count;
-} hwmap_ctx_t;
-
-static const char *hwmap_mode_str(claw_hw_mode_t mode)
-{
-    switch (mode) {
-    case CLAW_HW_MODE_EXCLUSIVE:  return "EXCLUSIVE";
-    case CLAW_HW_MODE_SHARED_READ: return "SHARED_READ";
-    default: return "?";
-    }
-}
-
-static void hwmap_iter_cb(const char *resource, const char *owner_tag,
-                          claw_hw_mode_t mode, void *user_ctx)
-{
-    hwmap_ctx_t *ctx = (hwmap_ctx_t *)user_ctx;
-    ctx->count++;
-    printf("  %-11s  %-32s  %s\n",
-           hwmap_mode_str(mode),
-           resource ? resource : "?",
-           owner_tag ? owner_tag : "?");
-}
-
+/* Copy registry state before printing, without holding its lock. */
 static int cmd_hwmap(int argc, char **argv)
 {
-    if (argc >= 2 && strcmp(argv[1], "query") == 0) {
-        if (argc < 3) {
-            printf("Usage: hwmap query <resource>\n");
+    const char *resource = NULL;
+    if (argc != 1) {
+        if (argc != 3 || strcmp(argv[1], "query") != 0) {
+            printf("Usage: hwmap [query <resource>]\n");
             return 1;
         }
-        const char *holder = NULL;
-        esp_err_t err = claw_hw_query(argv[2], &holder);
-        if (err == ESP_OK && holder) {
-            printf("%s -> %s\n", argv[2], holder);
-        } else {
-            printf("%s -> (unclaimed)\n", argv[2]);
+        resource = argv[2];
+    }
+    size_t count = 0;
+    size_t capacity = 0;
+    claw_hw_entry_t *entries = NULL;
+    esp_err_t err = ESP_OK;
+    for (unsigned attempt = 0; attempt < 3; attempt++) {
+        err = claw_hw_registry_query(s_hw_registry, resource, entries, capacity, &count);
+        if (err != ESP_ERR_INVALID_SIZE) break;
+        free(entries);
+        entries = calloc(count, sizeof(*entries));
+        if (!entries) {
+            err = ESP_ERR_NO_MEM;
+            break;
         }
-        return 0;
+        capacity = count;
     }
-
-    printf("Active hardware leases:\n");
-    printf("  %-11s  %-32s  %s\n", "MODE", "RESOURCE", "OWNER");
-    hwmap_ctx_t ctx = {0};
-    esp_err_t err = claw_hw_foreach(hwmap_iter_cb, &ctx);
-    if (err != ESP_OK) {
-        printf("hwmap: iteration failed: %s\n", esp_err_to_name(err));
-        return 1;
+    if (err == ESP_OK) {
+        printf("%-10s %-28s %-5s %-10s %s\n", "POLICY", "RESOURCE", "USERS", "CLAIM", "OWNER");
+        for (size_t i = 0; i < count; i++) {
+            const claw_hw_entry_t *entry = &entries[i];
+            printf("%-10s %-28s %-5u %-10" PRIu64 " %s\n",
+                   entry->policy == CLAW_HW_SHARED ? "SHARED" : "EXCLUSIVE", entry->resource,
+                   (unsigned)entry->users, entry->claim_id, entry->owner[0] ? entry->owner : "(free)");
+        }
+        printf("(%u entries)\n", (unsigned)count);
+    } else {
+        printf("hwmap: %s\n", esp_err_to_name(err));
     }
-    printf("(%d entries)\n", ctx.count);
-    return 0;
+    free(entries);
+    return err == ESP_OK ? 0 : 1;
 }
 
 static void register_cap_cli_commands(void)
@@ -406,8 +395,10 @@ static void register_cap_cli_commands(void)
 #endif
 }
 
-esp_err_t app_claw_cli_start(void)
+esp_err_t app_claw_cli_start(claw_hw_registry_handle_t registry)
 {
+    if (!registry) return ESP_ERR_INVALID_ARG;
+    s_hw_registry = registry;
     esp_console_repl_t *repl = NULL;
     esp_console_repl_config_t repl_config = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
 

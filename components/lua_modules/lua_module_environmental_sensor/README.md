@@ -1,5 +1,7 @@
 # Lua Environmental Sensor
 
+**Current availability:** `environmental_sensor.new(...)` returns an error until hardware resource ownership is integrated. Enabling this component does not enable construction; the examples below describe the API, not a currently runnable workflow.
+
 This module describes how to read environmental data from Lua. It supports Bosch BME690 and DHT-family sensors when the corresponding backend is enabled in the firmware build.
 
 ## How to call

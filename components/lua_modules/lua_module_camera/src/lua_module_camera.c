@@ -16,10 +16,54 @@
 #include "lauxlib.h"
 #include "lua.h"
 #include "camera_hal.h"
+#include "cap_lua_hw.h"
 
 #define LUA_MODULE_CAMERA_NAME "camera"
 
 static const char *TAG = "lua_camera";
+
+static const char s_camera_lease_key;
+
+static esp_err_t lua_camera_release(cap_lua_hw_lease_t *lease)
+{
+    if (!lease->id) return ESP_OK;
+    esp_err_t err = camera_is_open() ? camera_close() : ESP_OK;
+    return err == ESP_OK ? cap_lua_hw_release(lease) : err;
+}
+
+static int lua_camera_gc(lua_State *L)
+{
+    cap_lua_hw_lease_t *lease = lua_touserdata(L, 1);
+    esp_err_t err = lua_camera_release(lease);
+    if (err != ESP_OK) ESP_LOGE("lua_camera", "Cleanup failed: %s", esp_err_to_name(err));
+    return 0;
+}
+
+static cap_lua_hw_lease_t *lua_camera_lease(lua_State *L, bool create)
+{
+    lua_rawgetp(L, LUA_REGISTRYINDEX, &s_camera_lease_key);
+    cap_lua_hw_lease_t *lease = lua_touserdata(L, -1);
+    if (!lease && create) {
+        lua_pop(L, 1);
+        lease = lua_newuserdata(L, sizeof(*lease));
+        memset(lease, 0, sizeof(*lease));
+        if (luaL_newmetatable(L, "camera.lease")) {
+            lua_pushcfunction(L, lua_camera_gc);
+            lua_setfield(L, -2, "__gc");
+        }
+        lua_setmetatable(L, -2);
+        lua_pushvalue(L, -1);
+        lua_rawsetp(L, LUA_REGISTRYINDEX, &s_camera_lease_key);
+    }
+    lua_pop(L, 1);
+    return lease;
+}
+
+static void lua_camera_require(lua_State *L)
+{
+    cap_lua_hw_lease_t *lease = lua_camera_lease(L, false);
+    if (!lease || !lease->id) luaL_error(L, "camera is not owned by this Lua environment");
+}
 
 static const char *lua_module_camera_source_name(esp_video_device_source_t source)
 {
@@ -254,6 +298,14 @@ static int lua_module_camera_open(lua_State *L)
         lua_module_camera_optional_bool_field(L, 2, "nearest", &opt_nearest);
     }
 
+    cap_lua_hw_lease_t *lease = lua_camera_lease(L, true);
+    if (!lease->id) {
+        char key[CLAW_HW_KEY_SIZE];
+        const char *keys[] = { claw_hw_key_device(key, sizeof(key), "camera") };
+        err = cap_lua_hw_claim(L, lease, "lua/camera", keys, 1);
+        if (err != ESP_OK) return luaL_error(L, "camera claim failed: %s", esp_err_to_name(err));
+    }
+
     /* Fast path: nothing to enumerate. Pass through to the HAL — either no
      * opts at all (idempotent open) or exact (w, h) with no nearest snap. */
     bool needs_probe = has_format || (opt_nearest && opts.width != 0 && opts.height != 0);
@@ -366,6 +418,7 @@ static int lua_module_camera_open(lua_State *L)
 
 static int lua_module_camera_set_vflip(lua_State *L)
 {
+    lua_camera_require(L);
     luaL_checktype(L, 1, LUA_TBOOLEAN);
     const bool enable = lua_toboolean(L, 1) != 0;
     esp_err_t err = camera_set_vflip(enable);
@@ -382,6 +435,7 @@ static int lua_module_camera_set_vflip(lua_State *L)
 
 static int lua_module_camera_set_hmirror(lua_State *L)
 {
+    lua_camera_require(L);
     luaL_checktype(L, 1, LUA_TBOOLEAN);
     const bool enable = lua_toboolean(L, 1) != 0;
     esp_err_t err = camera_set_hmirror(enable);
@@ -399,19 +453,22 @@ static int lua_module_camera_set_hmirror(lua_State *L)
 /* camera.is_open() -> bool */
 static int lua_module_camera_is_open(lua_State *L)
 {
-    lua_pushboolean(L, camera_is_open());
+    cap_lua_hw_lease_t *lease = lua_camera_lease(L, false);
+    lua_pushboolean(L, lease && lease->id && camera_is_open());
     return 1;
 }
 
 /* camera.is_streaming() -> bool */
 static int lua_module_camera_is_streaming(lua_State *L)
 {
-    lua_pushboolean(L, camera_is_streaming());
+    cap_lua_hw_lease_t *lease = lua_camera_lease(L, false);
+    lua_pushboolean(L, lease && lease->id && camera_is_streaming());
     return 1;
 }
 
 static int lua_module_camera_flush(lua_State *L)
 {
+    lua_camera_require(L);
     esp_err_t err = camera_flush();
 
     if (err == ESP_ERR_INVALID_STATE) {
@@ -454,6 +511,7 @@ static int lua_module_camera_push_fps_for_size(lua_State *L, uint32_t pixel_form
 
 static int lua_module_camera_list_formats(lua_State *L)
 {
+    lua_camera_require(L);
     camera_format_desc_t desc = {0};
 
     lua_newtable(L);
@@ -521,6 +579,7 @@ static int lua_module_camera_list_formats(lua_State *L)
 
 static int lua_module_camera_info(lua_State *L)
 {
+    lua_camera_require(L);
     camera_stream_info_t info = {0};
     esp_err_t err = camera_get_stream_info(&info);
 
@@ -543,6 +602,7 @@ static int lua_module_camera_info(lua_State *L)
 
 static int lua_module_camera_get_frame(lua_State *L)
 {
+    lua_camera_require(L);
     camera_frame_info_t frame_info = {0};
     lua_image_frame_info_t info = {0};
     int timeout_ms = (int)luaL_optinteger(L, 1, 0);
@@ -580,7 +640,8 @@ static int lua_module_camera_get_frame(lua_State *L)
 
 static int lua_module_camera_close(lua_State *L)
 {
-    esp_err_t err = camera_close();
+    cap_lua_hw_lease_t *lease = lua_camera_lease(L, false);
+    esp_err_t err = lease ? lua_camera_release(lease) : ESP_OK;
 
     if (err != ESP_OK) {
         uint32_t borrowed_count = 0;

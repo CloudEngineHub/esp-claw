@@ -10,6 +10,9 @@ on the same bus.
   - `port`: I2C port number, usually `0` or `1`
   - `sda`, `scl`: GPIO numbers for SDA and SCL
   - `freq_hz`: optional clock frequency in Hz, default `400000`
+- Borrow a board-initialized bus with `local bus = i2c.borrow(0)`
+  - The board must initialize the bus and keep it alive throughout Lua use; borrowing does not initialize or reconfigure its controller or pins. Do not borrow a bus created by `i2c.new()`; reuse its Lua handle instead
+  - The borrowed Lua handle defaults to `400000` Hz for new devices; use `bus:device(addr, clk_speed)` to choose another device speed
 - Scan the bus for devices with `local addrs = bus:scan()`
   - Returns a Lua array of 7-bit addresses that ACKed
 - Attach a device with `local dev = bus:device(addr [, clk_speed])`
@@ -22,9 +25,10 @@ on the same bus.
   - `dev:write(data [, mem_addr])` where `data` is a string or a table of bytes
   - `dev:address()` → the 7-bit address
 - Close handles when you're done with `dev:close()` and `bus:close()`.
-  **Always close every device before closing its bus.** Handles are also
-  cleaned up automatically on garbage collection, but explicit close is
-  preferred so resources are released deterministically.
+  **Always close every device before closing its bus.** Closing a bus with live devices fails. Closing a borrowed handle leaves the board bus initialized.
+  Unreachable handles are finalized by Lua GC; job exit closes remaining handles. Each device keeps its Lua bus handle alive until the device closes. Retry a failed explicit close before dropping the handle.
+
+`i2c.new()` claims the controller and pins exclusively; it cannot reuse a board-initialized controller. Each device separately claims its address, so borrowing a bus does not bypass an existing address claim. A board IMU holds its address from Board Manager initialization until device deinitialization. Closing a Lua handle does not release that board-owned address; an uninitialized device does not reserve it.
 
 `mem_addr` is the 8-bit internal register/memory address inside the device.
 Omit it (or pass `nil`) for devices that have no internal address. Any error
@@ -43,18 +47,20 @@ Full API docs for these helpers are bundled with the libraries.
 ```lua
 local i2c = require("i2c")
 
-local bus = i2c.new(0, 21, 22, 400000)
+local bus = i2c.borrow(0)
 for _, addr in ipairs(bus:scan()) do
     print(string.format("found device at 0x%02X", addr))
 end
 bus:close()
 ```
 
-## Example: read a register from a device
+## Example: read a register from an external device
+
+Connect a separate MPU6050-compatible sensor to free GPIO4/SDA and GPIO5/SCL on controller 1. These pins and controller are not reserved by the ACM2 manifest; check your board before using them. Use `imu.new({ device = "imu_sensor" })` for the built-in IMU instead.
 ```lua
 local i2c = require("i2c")
 
-local bus = i2c.new(0, 21, 22)
+local bus = i2c.new(1, 4, 5, 100000)
 local dev = bus:device(0x68)             -- MPU6050-style address
 local who_am_i = dev:read_byte(0x75)     -- read register 0x75
 print(string.format("WHO_AM_I = 0x%02X", who_am_i))
@@ -74,3 +80,5 @@ dev:write("\x01\x02\x03")
 -- or a table of bytes (with optional leading register address)
 dev:write({0xA0, 0x55, 0xAA}, 0x10)
 ```
+
+I2C addresses are claimed exclusively when devices are opened and released when they close. Borrowing a board bus does not claim its controller.

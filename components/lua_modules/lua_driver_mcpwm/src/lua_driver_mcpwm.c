@@ -11,6 +11,7 @@
 #include <stdint.h>
 
 #include "cap_lua.h"
+#include "cap_lua_hw.h"
 #include "driver/gpio.h"
 #include "driver/mcpwm_prelude.h"
 #include "freertos/FreeRTOS.h"
@@ -42,6 +43,7 @@ typedef struct {
 } lua_driver_mcpwm_config_t;
 
 typedef struct {
+    cap_lua_hw_lease_t lease;
     mcpwm_timer_handle_t timer;
     mcpwm_oper_handle_t oper;
     mcpwm_cmpr_handle_t comparator[LUA_DRIVER_MCPWM_MAX_CHANNELS];
@@ -191,7 +193,7 @@ static esp_err_t lua_driver_mcpwm_destroy(lua_driver_mcpwm_ud_t *ud)
         ESP_RETURN_ON_ERROR(mcpwm_del_timer(ud->timer), TAG, "delete timer failed");
         ud->timer = NULL;
     }
-    return ESP_OK;
+    return cap_lua_hw_release(&ud->lease);
 }
 
 static esp_err_t lua_driver_mcpwm_create(lua_driver_mcpwm_ud_t *ud)
@@ -500,7 +502,13 @@ static int lua_driver_mcpwm_new(lua_State *L)
     /* Attach the finalizer before acquiring hardware resources. */
     luaL_getmetatable(L, LUA_DRIVER_MCPWM_METATABLE);
     lua_setmetatable(L, -2);
-    esp_err_t err = lua_driver_mcpwm_create(ud);
+    char key_a[CLAW_HW_KEY_SIZE], key_b[CLAW_HW_KEY_SIZE];
+    const char *keys[] = {
+        claw_hw_key_gpio(key_a, sizeof(key_a), config.gpio[0]),
+        config.channel_count > 1 ? claw_hw_key_gpio(key_b, sizeof(key_b), config.gpio[1]) : NULL,
+    };
+    esp_err_t err = cap_lua_hw_claim(L, &ud->lease, "lua/mcpwm", keys, config.channel_count);
+    if (err == ESP_OK) err = lua_driver_mcpwm_create(ud);
     if (err != ESP_OK) {
         (void)lua_driver_mcpwm_destroy(ud);
         return luaL_error(L, "mcpwm new failed: %s", esp_err_to_name(err));

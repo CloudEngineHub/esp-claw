@@ -1,6 +1,6 @@
 # lua_module_vision
 
-Lua vision modules backed by `image.frame` buffers.
+Detect motion, colors, QR codes, and objects in `image.frame` images.
 
 ## Modules
 
@@ -36,14 +36,14 @@ if result.motion and result.box then
 end
 ```
 
-The first `detect()` call seeds the previous-frame buffer and returns `ready = false`; subsequent calls compare against the preceding frame.
+The first `detect()` call returns `ready = false`; subsequent calls compare against the preceding frame.
 
 ### API
 
 - `motion.new([opts]) -> detector`: creates an independent detector.
 - `detector:detect(frame) -> result`: runs detection with the detector's fixed configuration.
 - `detector:reset()`: clears previous-frame and alert state.
-- `detector:close()`: releases working buffers early. Garbage collection also releases them.
+- `detector:close()`: closes the detector. Garbage collection also closes it.
 
 ### Options
 
@@ -86,7 +86,7 @@ end
 
 `color_detect.detect(frame[, opts])` accepts an `image.frame` and returns a table. Options include `source = { x, y, width, height }`, `h_min`, `h_max`, `s_min`, `s_max`, `v_min`, `v_max`, `l_min`, `l_max`, `a_min`, `a_max`, `b_min`, `b_max`, `x_stride`, `y_stride`, `min_pixels`, `max_blob_pixels`, and `max_pixels`. `s_*` and `v_*` may use `0..1` or `0..255`; hue uses `0..180`. Detection runs on a resized image of at most `100x100`; results are mapped back to the source image. Both strides default to `2` and accept `1..16`.
 
-Provide all six LAB fields to use a direct LAB threshold (`L: 0..100`, `A/B: -128..127`); LAB takes precedence over HSV fields. If no LAB field is present, the hue range is split into LAB thresholds internally; partial LAB input is rejected. Converted thresholds are cached until color parameters change.
+Provide all six LAB fields to use a direct LAB threshold (`L: 0..100`, `A/B: -128..127`); LAB takes precedence over HSV fields. If no LAB field is present, HSV fields are used. Partial LAB input is rejected.
 
 ```lua
 local result = color_detect.detect(frame, {

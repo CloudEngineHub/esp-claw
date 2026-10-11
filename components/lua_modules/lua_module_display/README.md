@@ -28,7 +28,7 @@ The drawing sequence is always `begin()` → draw → `present()`. The screen is
 | --- | --- | --- |
 | `framebuffer_count` | `1` | `1` or `2`; use `2` only when the extra memory is justified by the scene |
 
-The drawing format comes from the built-in screen's color depth. The display service handles any panel-interface byte-order conversion; Lua code does not configure it.
+The drawing format follows the built-in screen's color depth. No panel byte-order configuration is needed.
 
 `screen:info()` returns:
 
@@ -157,31 +157,6 @@ Both `image()` and `blit()` obey the current translation and clip. Their coordin
 
 `screen:touch() -> { points = { { id = number, x = number, y = number }, ... } }` returns the latest touch snapshot in screen coordinates. `points` contains every active touch point in provider order and is empty when nothing is touching the screen. Track a gesture with `id`; do not assume the array position remains stable. On a board without built-in touch, the call raises a not-supported error; check `screen:info().touch_available` first.
 
-Invalid arguments, invalid UTF-8, invalid frame state, a closed screen or font, and unavailable hardware raise Lua errors. Use `pcall` when a scene should recover from an expected failure. Tests and runnable examples are in [`test/`](test/).
+Invalid arguments, invalid UTF-8, invalid frame state, a closed screen or font, and unavailable hardware raise Lua errors. Use `pcall` when a scene should recover from an expected failure.
 
 For animation, load images and fonts once, reuse prepared colors and pixel strings, and submit each frame with one `begin()` / `present()` pair.
-
-## Performance benchmark
-
-[`test/display_benchmark.lua`](test/display_benchmark.lua) measures the public display API on the real screen. It covers open-to-ready latency, framebuffer memory, partial and full presentation, a mixed scene, rectangle fill, lines, circles, text, raw-pixel blitting, close cleanup, and both one- and two-framebuffer modes. The same script detects the legacy or current API so results from before and after the refactor remain comparable.
-
-Run it as an asynchronous managed Lua job because it owns the screen for the duration of the test. Firmware-baked tests are available through the `builtin_lua_modules` skill; pass the absolute path that skill provides:
-
-```text
-lua --run-async --path <absolute-path-to-display_benchmark.lua> --args-json "{\"label\":\"candidate\"}" --timeout-ms 180000
-```
-
-The optional JSON arguments are:
-
-| Argument | Default | Range or meaning |
-| --- | --- | --- |
-| `label` | `"unspecified"` | Identifier copied to every output record |
-| `repeats` | `3` | `1..7`; the median repeat is reported |
-| `warmup_iterations` | `3` | `1..20` |
-| `frame_iterations` | `24` | `4..200` |
-| `raster_iterations` | `800` | `100..10000` |
-| `framebuffer_count` | `0` | `0` tests both modes; otherwise `1` or `2` |
-
-Machine-readable records start with `DISPLAY_BENCH|`. `result` records report `median_us`, `min_us`, `max_us`, `us_per_op`, `ops_per_s`, and frame-workload `pixels_per_s`. `memory` records report `open_us`, `ready_us`, framebuffer bytes, and SRAM/PSRAM use. `memory_after_close` shows the remaining heap delta, and a successful run ends with `status=PASS`.
-
-For a valid comparison, use the same board, display interface, pixel format, byte-order defaults, CPU frequency, ESP-IDF revision, benchmark arguments, and background workload. Let startup networking and time synchronization settle before each run. Lower latency and memory values are better; higher throughput values are better.

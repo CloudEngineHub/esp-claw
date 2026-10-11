@@ -26,9 +26,9 @@ on the same bus.
   - `dev:address()` → the 7-bit address
 - Close handles when you're done with `dev:close()` and `bus:close()`.
   **Always close every device before closing its bus.** Closing a bus with live devices fails. Closing a borrowed handle leaves the board bus initialized.
-  Unreachable handles are finalized by Lua GC; job exit closes remaining handles. Each device keeps its Lua bus handle alive until the device closes. Retry a failed explicit close before dropping the handle.
+  Unreachable handles are finalized by Lua GC; job exit closes remaining handles. Retry a failed explicit close before dropping the handle.
 
-`i2c.new()` claims the controller and pins exclusively; it cannot reuse a board-initialized controller. Each device separately claims its address, so borrowing a bus does not bypass an existing address claim. A board IMU holds its address from Board Manager initialization until device deinitialization. Closing a Lua handle does not release that board-owned address; an uninitialized device does not reserve it.
+`i2c.new()` requires an unused controller and pins. On any bus, an address already used by another device cannot be opened again, including through `i2c.borrow()`. Use the device-specific module for an initialized board sensor.
 
 `mem_addr` is the 8-bit internal register/memory address inside the device.
 Omit it (or pass `nil`) for devices that have no internal address. Any error
@@ -56,7 +56,7 @@ bus:close()
 
 ## Example: read a register from an external device
 
-Connect a separate MPU6050-compatible sensor to free GPIO4/SDA and GPIO5/SCL on controller 1. These pins and controller are not reserved by the ACM2 manifest; check your board before using them. Use `imu.new({ device = "imu_sensor" })` for the built-in IMU instead.
+Connect a separate MPU6050-compatible sensor to free GPIO4/SDA and GPIO5/SCL on controller 1. Check that these pins and controller are available on your board. Use `imu.new({ device = "imu_sensor" })` for the built-in IMU instead.
 ```lua
 local i2c = require("i2c")
 
@@ -80,5 +80,3 @@ dev:write("\x01\x02\x03")
 -- or a table of bytes (with optional leading register address)
 dev:write({0xA0, 0x55, 0xAA}, 0x10)
 ```
-
-I2C addresses are claimed exclusively when devices are opened and released when they close. Borrowing a board bus does not claim its controller.

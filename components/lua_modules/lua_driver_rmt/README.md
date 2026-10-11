@@ -14,9 +14,9 @@ This module exposes raw RMT symbol transmit and receive to Lua. Use it for proto
 - Inspect configuration with `handle:info()`
 - Close handles with `handle:close()`
 
-Use `handle:close()` for prompt release; Lua GC and job exit also finalize handles. A failed close retains the channel, buffers, and GPIO claim for retry. After a TX timeout, close the handle before creating a replacement; the transmit buffer remains owned until hardware stops.
+Use `handle:close()` for prompt release; Lua GC and job exit also finalize handles. If close fails, retry it before reusing the channel or GPIO. After a TX timeout, close the handle before creating a replacement.
 
-GPIO4 and GPIO5 in these examples are not reserved by the ACM2 manifest. Select registered, unoccupied pins on other boards.
+GPIO4 and GPIO5 are example pins. Select available pins with the required input/output capability on your board.
 
 ## TX options
 

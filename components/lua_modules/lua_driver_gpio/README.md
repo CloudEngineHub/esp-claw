@@ -7,15 +7,15 @@ This module describes how to correctly use gpio when writing Lua scripts.
 - Call `gpio.set_direction(pin, mode)` to set pin mode
 - Call `gpio.set_level(pin, level)` to set output level
 - Call `gpio.get_level(pin)` to read pin level
-- Call `gpio.close(pin)` to reset the pin and release its claim; repeated close is safe
+- Call `gpio.close(pin)` to reset and release the pin; repeated close is safe
 
 Supported modes are `"input"`, `"output"`, `"input_output"`, `"output_od"`, `"input_output_od"`, and `"disable"`.
 
 `set_direction` and `set_level` return no values on success and raise a Lua error on failure. `get_level` returns `0` or `1`.
 
-The first operation claims the pin for the current Lua environment. Pins held by an initialized board driver or another hardware object are rejected before configuration. The environment keeps a strong reference to each claimed pin: ordinary garbage collection does not release it. Call `gpio.close(pin)` explicitly or let job-exit cleanup close it. A failed hardware reset retains the claim for retry.
+A pin cannot be used while another device or script owns it. Call `gpio.close(pin)` to release it; otherwise it remains in use until the job exits. Garbage collection alone does not release pins. Retry a failed close before reusing the pin.
 
-The example uses GPIO4, which is not reserved by the ACM2 board manifest; verify availability on other boards.
+The example uses GPIO4. Check that it is available and output-capable on your board.
 
 ## Example
 ```lua

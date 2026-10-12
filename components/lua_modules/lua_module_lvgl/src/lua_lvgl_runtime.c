@@ -99,6 +99,7 @@ esp_err_t lua_lvgl_lock(void)
 
 void lua_lvgl_unlock(void)
 {
+    lua_lvgl_sweep_records_locked();
     if (s_lvgl.mutex) {
         xSemaphoreGive(s_lvgl.mutex);
     }
@@ -174,6 +175,7 @@ static void lua_lvgl_release_runtime_locked(void)
 
     lua_lvgl_delete_owned_objects_locked();
     lua_lvgl_invalidate_records_locked();
+    lua_lvgl_sweep_records_locked();
     lua_lvgl_release_fonts_locked();
     lua_lvgl_drain_event_queue_locked();
     lua_lvgl_drain_pending_unrefs_locked(owner);

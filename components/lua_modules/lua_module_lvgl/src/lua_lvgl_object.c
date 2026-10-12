@@ -113,6 +113,7 @@ lv_obj_t *lua_lvgl_validate_ud_locked(const lua_lvgl_obj_ud_t *ud,
     }
     if (!lv_obj_is_valid(record->obj)) {
         record->obj = NULL;
+        lua_lvgl_record_release_resources(record);
         record->valid = false;
         *out_error = "lvgl object is no longer valid";
         return NULL;
@@ -123,15 +124,64 @@ lv_obj_t *lua_lvgl_validate_ud_locked(const lua_lvgl_obj_ud_t *ud,
     return record->obj;
 }
 
+static void lua_lvgl_record_unref(lua_lvgl_obj_record_t *record)
+{
+    if (atomic_fetch_sub(&record->refs, 1) == 1) free(record);
+}
+
+void lua_lvgl_sweep_records_locked(void)
+{
+    lua_lvgl_obj_record_t **link = &s_lvgl.records;
+
+    while (*link) {
+        lua_lvgl_obj_record_t *record = *link;
+        if (record->valid) {
+            link = &record->next;
+        } else {
+            *link = record->next;
+            record->next = NULL;
+            lua_lvgl_record_unref(record);
+        }
+    }
+}
+
+static int lua_lvgl_new_obj_ud(lua_State *L)
+{
+    lua_lvgl_obj_type_t type = (lua_lvgl_obj_type_t)lua_tointeger(L, 1);
+    lua_lvgl_obj_ud_t *ud = (lua_lvgl_obj_ud_t *)lua_newuserdata(L, sizeof(*ud));
+    ud->record = NULL;
+    luaL_getmetatable(L, lua_lvgl_metatable_for_type(type));
+    lua_setmetatable(L, -2);
+    return 1;
+}
+
 lua_lvgl_obj_ud_t *lua_lvgl_push_obj_ex(lua_State *L, lv_obj_t *obj, lua_lvgl_obj_type_t type, bool owned)
 {
-    lua_lvgl_obj_record_t *record = (lua_lvgl_obj_record_t *)calloc(1, sizeof(*record));
-    lua_lvgl_obj_ud_t *ud;
-
-    if (!record) {
+    if (!obj) return NULL;
+    /* Allocation may trigger GC or fail while the caller holds the LVGL lock. */
+    lua_pushcfunction(L, lua_lvgl_new_obj_ud);
+    lua_pushinteger(L, type);
+    if (lua_pcall(L, 1, 1, 0) != LUA_OK) {
+        lua_pop(L, 1);
         return NULL;
     }
-    ud = (lua_lvgl_obj_ud_t *)lua_newuserdata(L, sizeof(*ud));
+    lua_lvgl_obj_ud_t *ud = lua_touserdata(L, -1);
+
+    for (lua_lvgl_obj_record_t *record = s_lvgl.records; record; record = record->next) {
+        if (record->valid && record->obj == obj && record->generation == s_lvgl.generation) {
+            atomic_fetch_add(&record->refs, 1);
+            record->owned |= owned;
+            ud->record = record;
+            return ud;
+        }
+    }
+    lua_lvgl_obj_record_t *record = calloc(1, sizeof(*record));
+    if (!record) return NULL;
+    if (!lv_obj_add_event_cb(obj, lua_lvgl_obj_delete_event_cb, LV_EVENT_DELETE, record)) {
+        free(record);
+        return NULL;
+    }
+    atomic_init(&record->refs, 2);
     record->obj = obj;
     record->generation = s_lvgl.generation;
     record->type = type;
@@ -140,9 +190,6 @@ lua_lvgl_obj_ud_t *lua_lvgl_push_obj_ex(lua_State *L, lv_obj_t *obj, lua_lvgl_ob
     record->next = s_lvgl.records;
     s_lvgl.records = record;
     ud->record = record;
-    lv_obj_add_event_cb(obj, lua_lvgl_obj_delete_event_cb, LV_EVENT_DELETE, record);
-    luaL_getmetatable(L, lua_lvgl_metatable_for_type(type));
-    lua_setmetatable(L, -2);
     return ud;
 }
 
@@ -156,6 +203,9 @@ void lua_lvgl_invalidate_records_locked(void)
 
     for (record = s_lvgl.records; record != NULL; record = record->next) {
         if (record->generation == s_lvgl.generation) {
+            if (record->valid && record->obj && lv_obj_is_valid(record->obj)) {
+                lv_obj_remove_event_cb_with_user_data(record->obj, lua_lvgl_obj_delete_event_cb, record);
+            }
             lua_lvgl_record_release_resources(record);
             record->obj = NULL;
             record->valid = false;
@@ -270,8 +320,11 @@ int lua_lvgl_obj_gc(lua_State *L)
      * raises a Lua error on failure, which is undesirable inside __gc. */
     lua_lvgl_obj_ud_t *ud = (lua_lvgl_obj_ud_t *)lua_touserdata(L, 1);
 
-    if (ud != NULL) {
+    if (ud && ud->record) {
+        lua_lvgl_obj_record_t *record = ud->record;
         ud->record = NULL;
+        /* Lua may collect while the LVGL lock is held. Never lock in GC. */
+        lua_lvgl_record_unref(record);
     }
     return 0;
 }

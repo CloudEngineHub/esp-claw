@@ -213,20 +213,24 @@ def i2c_addresses(out, item, peripherals):
 def parse_device(out, item, peripherals):
     name, kind = item['name'], item.get('type')
     if kind == 'custom':
-        if item.get('chip') not in ('bmi270', 'icm42670', 'mpu6050'):
+        if item.get('chip') not in ('bmi270', 'icm42670', 'mpu6050', 'bmm150', 'bmm350', 'qmc6309'):
             out.ignored_custom.append(name)
             return
         config = mapping(item.get('config'), name)
         refs = peripheral_refs(item)
         if len(refs) != 1:
-            raise BoardResourceError(f'{name}: IMU requires one I2C peripheral')
+            raise BoardResourceError(f'{name}: Sensor requires one I2C peripheral')
         peripheral = peripherals.get(mapping(refs[0], name).get('name'), {})
         if peripheral.get('type') != 'i2c':
-            raise BoardResourceError(f'{name}: IMU requires an I2C peripheral')
+            raise BoardResourceError(f'{name}: Sensor requires an I2C peripheral')
         port = number(mapping(peripheral.get('config'), name).get('port', -1), 'i2c', name)
-        address = number(config.get('i2c_addr', config.get('addr', 0x68)), 'number', name)
+        default_address = {'bmm150': 0x10, 'bmm350': 0x14, 'qmc6309': 0x7c}.get(item.get('chip'), 0x68)
+        address = number(config.get('i2c_addr', config.get('addr', default_address)), 'number', name)
+        # BMM150 addr accepts 7-bit addresses or shifted 8-bit write addresses.
+        if item.get('chip') == 'bmm150' and 'i2c_addr' not in config and address in (0x20, 0x22, 0x24, 0x26):
+            address >>= 1
         if port < 0 or not 0 <= address <= 0x7f:
-            raise BoardResourceError(f'{name}: invalid IMU port or 7-bit address')
+            raise BoardResourceError(f'{name}: invalid sensor port or 7-bit address')
         out.add('i2c_addr', port, address)
         out.pins(config, ('int_gpio_num', 'sdo_gpio_num'), name)
         out.devices.append((name, kind))

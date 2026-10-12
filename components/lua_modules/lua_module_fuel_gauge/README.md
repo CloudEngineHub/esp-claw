@@ -33,9 +33,9 @@ Currently supported chips: **BQ27220**, **MAX17048** (voltage + SOC only, no cur
 | `bus`      | userdata| Existing `i2c` bus handle, recommended               |
 | `close_bus`| boolean | Close a bus created from `port`/`sda`/`scl` when `gauge:close()` runs |
 
-For a board-initialized bus, use `fuel_gauge.new({ borrow = true, port = 0, chip = "bq27220" })`; `gauge:close()` closes its device and releases its borrow without stopping the board bus. The device address must be free. A caller-supplied `bus` remains caller-owned and must be closed after all gauges/devices using it.
+For a board-initialized bus, use `fuel_gauge.new({ borrow = true, port = 0, chip = "bq27220" })`; `gauge:close()` closes the gauge without stopping the board bus. The device address must be free. A caller-supplied `bus` remains caller-owned and must be closed after all gauges/devices using it.
 
-Close the gauge when finished. Once the gauge and its I2C handles become unreachable, Lua GC can release their claims; job exit also finalizes them.
+Close the gauge when finished. Garbage collection and job exit also clean up unused handles.
 
 ## Data format
 - `sample.chip` — chip name string

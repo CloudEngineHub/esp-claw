@@ -8,7 +8,6 @@ What this script exercises:
   - unavailable demo names are rejected
 ]]
 
-local board_manager = require("board_manager")
 local delay = require("delay")
 local lvgl = require("lvgl")
 
@@ -37,10 +36,7 @@ if #demos > 0 then
            "pre-init lvgl.demo error should mention runtime initialization")
 end
 
-local panel_handle, io_handle, width, height, panel_if =
-    board_manager.get_display_lcd_params("display_lcd")
-
-lvgl.init(panel_handle, io_handle, width, height, panel_if, {
+lvgl.init({
     buffer_lines = 10,
     tick_ms = 5,
     task_period_ms = 10,

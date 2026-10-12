@@ -50,4 +50,4 @@ pwm:stop()
 pwm:close()
 ```
 
-Hardware GPIOs are claimed before configuration. Occupied or unavailable resources raise an error; `close()` releases ownership only after hardware cleanup succeeds. Failed cleanup retains ownership for retry.
+Use free GPIOs suitable for the connected hardware. Occupied or unavailable resources raise an error. If `close()` fails, retry it before reusing the resources.

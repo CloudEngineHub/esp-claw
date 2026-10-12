@@ -8,6 +8,7 @@
 #include "lua_module_lvgl.h"
 
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -151,6 +152,7 @@ typedef struct lua_lvgl_pending_unref {
 } lua_lvgl_pending_unref_t;
 
 typedef struct lua_lvgl_obj_record {
+    atomic_uint refs; /* One list reference plus one per Lua userdata. */
     lv_obj_t *obj;
     lv_obj_t *aux_obj;
     lv_point_precise_t *line_points;
@@ -257,6 +259,7 @@ lv_obj_t *lua_lvgl_validate_ud_locked(const lua_lvgl_obj_ud_t *ud,
                                       lua_lvgl_obj_type_t *out_type,
                                       const char **out_error);
 void lua_lvgl_invalidate_records_locked(void);
+void lua_lvgl_sweep_records_locked(void);
 int lua_lvgl_obj_gc(lua_State *L);
 
 /* Method-style API support: build all per-type metatables under

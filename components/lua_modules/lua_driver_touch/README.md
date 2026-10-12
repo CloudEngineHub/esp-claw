@@ -14,13 +14,13 @@ When a request mentions `touch`, `touch channels`, or `capacitive sensor`, use t
 - Call `keys:close()` when done
 
 ## Options table
-`gpios` is optional when the board declares `touch_keys`; otherwise it is required. `touch.new()` uses the board pins and threshold. Every constructor atomically claims its actual GPIO list, whether it uses board defaults or explicit pins. Board `custom`/`init_skip` configuration alone does not reserve the pins; GPIO users and overlapping touch objects conflict before hardware initialization.
+`gpios` is optional when the board declares `touch_keys`; otherwise it is required. `touch.new()` uses the board pins and threshold. Pins already used by another device or touch object cannot be opened again.
 
 | Field             | Type    | Meaning                                              |
 |-------------------|---------|------------------------------------------------------|
 | `device`          | string  | Optional name returned by `keys:name()`              |
 | `gpios`           | array   | GPIO numbers of touch channels to read               |
-| `threshold_milli` | integer | Active threshold in permille of benchmark (default from Kconfig) |
+| `threshold_milli` | integer | Active threshold in permille of benchmark (firmware default) |
 
 ## Data format
 `keys:read()` returns a table with:
@@ -49,4 +49,4 @@ end
 keys:close()
 ```
 
-GPIO4/5 in this example must be free on the target board. Hardware GPIOs are claimed before configuration. Occupied or unavailable resources raise an error; `close()` releases ownership only after hardware cleanup succeeds. Failed cleanup retains ownership for retry.
+GPIO4/5 in this example must be free and touch-capable on your board. Unavailable pins raise an error. Close the handle when finished; retry a failed close before reusing the pins.

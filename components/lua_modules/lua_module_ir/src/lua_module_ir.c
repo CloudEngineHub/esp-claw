@@ -18,13 +18,13 @@
 #include "cap_lua.h"
 #include "cap_lua_hw.h"
 #include "driver/gpio.h"
+#include "driver/rmt_encoder.h"
 #include "driver/rmt_rx.h"
 #include "driver/rmt_tx.h"
 #include "esp_board_device.h"
 #include "esp_board_manager.h"
 #include "esp_check.h"
 #include "esp_log.h"
-#include "ir_encoder.h"
 #include "lauxlib.h"
 #include "sdkconfig.h"
 
@@ -180,11 +180,9 @@ static esp_err_t lua_module_ir_ensure_tx(lua_module_ir_handle_t *h)
     ESP_RETURN_ON_ERROR(rmt_apply_carrier(h->tx_channel, &carrier_cfg),
                         TAG, "Failed to apply IR carrier");
 
-    ir_encoder_config_t enc_cfg = {
-        .resolution = h->tx_resolution_hz,
-    };
-    ESP_RETURN_ON_ERROR(ir_encoder_new(&enc_cfg, &h->encoder),
-                        TAG, "Failed to create IR encoder");
+    rmt_copy_encoder_config_t enc_cfg = {};
+    ESP_RETURN_ON_ERROR(rmt_new_copy_encoder(&enc_cfg, &h->encoder),
+                        TAG, "Failed to create IR copy encoder");
 
     ESP_RETURN_ON_ERROR(rmt_enable(h->tx_channel), TAG, "Failed to enable TX channel");
     h->tx_enabled = true;

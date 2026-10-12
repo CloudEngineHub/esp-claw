@@ -1,11 +1,11 @@
 # Lua Image
 
-Shared image type and conversion helpers for Lua. Frames produced by `camera` or `image.load_file()` are `image.frame` userdata values that can be passed to `display` and `vision`.
+Shared image type and conversion helpers for Lua. Frames produced by `camera` or `image.load_file()` are `image.frame` objects that can be passed to `display` and `vision`.
 
 ## How to call
 - `local image = require("image")`
-- `image.convert(frame, format)` ensures the requested `image.*` format exists
-  in the frame's shared store and returns a new `image.frame` view for that format.
+- `image.convert(frame, format)` returns an `image.frame` in the requested
+  `image.*` format.
 - `image.resize(frame, opts)` returns a new, independent `image.frame` scaled
   to `opts.width` x `opts.height`. See "Example: resize" below.
 - `image.load_file(path)` reads an image file and returns an `image.frame`.
@@ -35,7 +35,7 @@ An `image.frame` is a Lua-visible image view. Methods:
 
 - `frame:info()` returns `{ width, height, bytes, pixel_format, timestamp_us, valid }`
 - `frame:data()` copies the buffer into a Lua string (slow, allocates)
-- `frame:release()` releases this view; the store is freed when the last view is released
+- `frame:release()` releases this view; it can no longer be read or drawn
 
 Release happens automatically when the variable is declared with the Lua 5.4+
 `<close>` attribute or when it is collected by GC, but explicit `<close>` is the
@@ -49,7 +49,7 @@ end
 -- frame is already released here
 ```
 
-Releasing the source frame does not invalidate converted views that are still alive. For camera frames, the capture buffer is returned only when the last view for that frame is released, so release all frame views promptly so capture can continue.
+Releasing the source frame does not invalidate converted views that are still alive. Release every view of a camera frame promptly so capture can continue.
 
 ## Pixel format names
 
@@ -90,9 +90,7 @@ The converted result is a new `image.frame` view. Release views with `<close>`, 
 (`image.RGB565` or `image.GRAY8` only; defaults to RGB565, or GRAY8 when the
 source is already gray). Optional `opts.filter` is `"nearest"` (default) or
 `"bilinear"`. Output dimensions follow the same 1920 x 1080 pixel cap as
-conversion. On PPA-capable targets, supported color conversions and bilinear
-scales that fit the hardware's 1/16 scale precision are accelerated
-automatically; all other cases keep the CPU fallback.
+conversion.
 
 ```lua
 local image = require("image")
@@ -137,9 +135,7 @@ do
 end
 ```
 
-`load_file()` and `save_file()` currently support `.jpg` / `.jpeg`. The returned
-frame keeps the file bytes alive until `frame:release()`, `<close>`, or GC
-releases it. The frame metadata reports the JPEG width, height, byte size, and
+`load_file()` and `save_file()` currently support `.jpg` / `.jpeg`. The frame metadata reports the JPEG width, height, byte size, and
 `pixel_format = "JPEG"`.
 
 ## Resource limits

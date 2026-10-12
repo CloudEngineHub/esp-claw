@@ -13,7 +13,7 @@
 - Stop output with `pwm:stop()`
 - Release resources with `pwm:close()`
 
-`pwm:stop()` stops output but retains the GPIO, channel, and timer claims. Use `pwm:close()` for prompt release; Lua GC and job exit also finalize handles. Retry a failed explicit close before dropping the handle. Compatible handles can share a timer; changing its frequency is rejected while another handle uses it.
+`pwm:stop()` stops output but keeps the GPIO, channel, and timer in use. Use `pwm:close()` for prompt release; Lua GC and job exit also finalize handles. Retry a failed explicit close before dropping the handle. Compatible handles can share a timer; changing its frequency is rejected while another handle uses it.
 
 ## Config table
 

@@ -16,14 +16,13 @@ local frame_iterations = integer_option("frame_iterations", 24, 4, 200)
 local raster_iterations = integer_option("raster_iterations", 800, 100, 10000)
 local requested_buffers = integer_option("framebuffer_count", 0, 0, 2)
 local label = tostring(options.label or "unspecified")
-local backend_name = type(display.open) == "function" and "refactored" or "legacy"
+local backend_name = "refactored"
 
 local active = nil
 local info = nil
 local text_options = { color = "#f0f4f8", font_size = 16 }
 local full_present_options = { full = true }
 
--- Keep workloads identical across the legacy and current public APIs.
 local function now_us()
     return math.floor(system.millis() * 1000)
 end
@@ -36,126 +35,23 @@ local function heap_snapshot()
 end
 
 local function open_display(framebuffer_count)
-    if backend_name == "refactored" then
-        active = display.open({ framebuffer_count = framebuffer_count })
-        info = active:info()
-        return
-    end
-
-    local board_manager = require("board_manager")
-    local panel, panel_io, width, height, panel_if = board_manager.get_display_lcd_params("display_lcd")
-    assert(panel, "built-in display is unavailable")
-    if framebuffer_count == 1 then
-        display.init(panel, panel_io, width, height, panel_if)
-    else
-        display.init(panel, panel_io, width, height, panel_if, nil, { framebuffer_count = framebuffer_count })
-    end
-    active = display
-    info = {
-        width = display.width,
-        height = display.height,
-        pixel_format = display.pixel_format,
-        bytes_per_pixel = display.bytes_per_pixel,
-        framebuffer_count = framebuffer_count,
-        framebuffer_bytes = display.width * display.height * display.bytes_per_pixel * framebuffer_count,
-    }
+    active = display.open({ framebuffer_count = framebuffer_count })
+    info = active:info()
 end
 
 local function close_display()
     if active == nil then return end
-    if backend_name == "refactored" then
-        active:close()
-    else
-        pcall(display.end_frame)
-        display.deinit()
-    end
+    active:close()
     active = nil
     info = nil
 end
 
 local function begin_frame(clear_color)
-    if backend_name == "refactored" then
-        if clear_color then active:begin({ clear = clear_color }) else active:begin() end
-    else
-        if clear_color then
-            display.begin_frame({ clear = true, color = clear_color })
-        else
-            display.begin_frame({ clear = false, preserve = true })
-        end
-    end
+    if clear_color then active:begin({ clear = clear_color }) else active:begin() end
 end
 
 local function present_frame(full)
-    if backend_name == "refactored" then
-        if full then active:present(full_present_options) else active:present() end
-    else
-        if full then display.present_full() else display.present() end
-        display.end_frame()
-    end
-end
-
-local function fill_rect(x, y, width, height, color)
-    if backend_name == "refactored" then
-        active:fill_rect(x, y, width, height, color)
-    else
-        display.fill_rect(x, y, width, height, color)
-    end
-end
-
-local function stroke_rect(x, y, width, height, color)
-    if backend_name == "refactored" then
-        active:stroke_rect(x, y, width, height, color)
-    else
-        display.draw_rect(x, y, width, height, color)
-    end
-end
-
-local function draw_line(x0, y0, x1, y1, color)
-    if backend_name == "refactored" then
-        active:line(x0, y0, x1, y1, color)
-    else
-        display.draw_line(x0, y0, x1, y1, color)
-    end
-end
-
-local function fill_circle(cx, cy, radius, color)
-    if backend_name == "refactored" then
-        active:fill_circle(cx, cy, radius, color)
-    else
-        display.fill_circle(cx, cy, radius, color)
-    end
-end
-
-local function stroke_circle(cx, cy, radius, color)
-    if backend_name == "refactored" then active:stroke_circle(cx, cy, radius, color) else display.draw_circle(cx, cy, radius, color) end
-end
-
-local function draw_arc(cx, cy, radius, start_angle, end_angle, color)
-    if backend_name == "refactored" then active:arc(cx, cy, radius, start_angle, end_angle, color) else display.draw_arc(cx, cy, radius, start_angle, end_angle, color) end
-end
-
-local function fill_round_rect(x, y, width, height, radius, color)
-    if backend_name == "refactored" then active:fill_round_rect(x, y, width, height, radius, color) else display.fill_round_rect(x, y, width, height, radius, color) end
-end
-
-local function fill_triangle(x0, y0, x1, y1, x2, y2, color)
-    if backend_name == "refactored" then active:fill_triangle(x0, y0, x1, y1, x2, y2, color) else display.fill_triangle(x0, y0, x1, y1, x2, y2, color) end
-end
-
-local function draw_text(x, y, text)
-    if backend_name == "refactored" then
-        active:text(x, y, text, text_options)
-    else
-        display.draw_text(x, y, text, text_options)
-    end
-end
-
-local function draw_pixels(x, y, pixels, pixel_options)
-    if backend_name == "refactored" then
-        active:blit(x, y, pixels, pixel_options)
-    else
-        display.draw_pixels(x, y, pixels, pixel_options)
-    end
+    if full then active:present(full_present_options) else active:present() end
 end
 
 local function summarize(values)
@@ -206,7 +102,6 @@ local function run_raster_case(name, framebuffer_count, iterations, render)
 end
 
 local function emit_profile(name, framebuffer_count, iterations, render)
-    if backend_name ~= "refactored" then return end
     local draw_us, present_us, sync_us, submitted_bytes = 0, 0, 0, 0
     for iteration = 1, iterations do
         render(iteration)
@@ -246,7 +141,7 @@ local function run_buffer_suite(framebuffer_count)
         local y_range = math.max(1, height - tile + 1)
         local x = (iteration * 37) % x_range
         local y = (iteration * 53) % y_range
-        fill_rect(x, y, tile, tile, iteration % 2 == 0 and "#2060a0" or "#70b030")
+        active:fill_rect(x, y, tile, tile, iteration % 2 == 0 and "#2060a0" or "#70b030")
         present_frame(false)
     end)
 
@@ -254,8 +149,8 @@ local function run_buffer_suite(framebuffer_count)
     run_frame_case("scattered_2x32", framebuffer_count, frame_iterations, scatter * scatter * 2, function(iteration)
         begin_frame(nil)
         local color = iteration % 2 == 0 and "#8040c0" or "#30a080"
-        fill_rect(0, 0, scatter, scatter, color)
-        fill_rect(width - scatter, height - scatter, scatter, scatter, color)
+        active:fill_rect(0, 0, scatter, scatter, color)
+        active:fill_rect(width - scatter, height - scatter, scatter, scatter, color)
         present_frame(false)
     end)
 
@@ -269,11 +164,11 @@ local function run_buffer_suite(framebuffer_count)
         for index = 1, 20 do
             local x = (index * 29 + iteration * 7) % math.max(1, width)
             local y = (index * 43 + iteration * 11) % math.max(1, height)
-            fill_rect(x - 8, y - 6, 24, 18, index % 2 == 0 and "#2878b8" or "#d06030")
-            draw_line(width // 2, height // 2, x, y, "#80d0f0")
-            fill_circle(x, y, 6, "#50c070")
+            active:fill_rect(x - 8, y - 6, 24, 18, index % 2 == 0 and "#2878b8" or "#d06030")
+            active:line(width // 2, height // 2, x, y, "#80d0f0")
+            active:fill_circle(x, y, 6, "#50c070")
         end
-        draw_text(8, 8, "Display benchmark 0123456789")
+        active:text(8, 8, "Display benchmark 0123456789", text_options)
         present_frame(true)
     end
     run_frame_case("complex_scene", framebuffer_count, scene_iterations, width * height, render_complex_scene)
@@ -282,56 +177,56 @@ local function run_buffer_suite(framebuffer_count)
     run_raster_case("fill_rect", framebuffer_count, raster_iterations, function(iteration)
         local x = (iteration * 17) % math.max(1, width)
         local y = (iteration * 31) % math.max(1, height)
-        fill_rect(x, y, 12, 12, "#4080c0")
+        active:fill_rect(x, y, 12, 12, "#4080c0")
     end)
 
     run_raster_case("line", framebuffer_count, raster_iterations, function(iteration)
         local y0 = (iteration * 13) % math.max(1, height)
         local y1 = (iteration * 47) % math.max(1, height)
-        draw_line(0, y0, width - 1, y1, "#f0a040")
+        active:line(0, y0, width - 1, y1, "#f0a040")
     end)
 
     run_raster_case("fill_circle", framebuffer_count, raster_iterations, function(iteration)
         local x = (iteration * 19) % math.max(1, width)
         local y = (iteration * 23) % math.max(1, height)
-        fill_circle(x, y, 8, "#40c080")
+        active:fill_circle(x, y, 8, "#40c080")
     end)
 
     run_raster_case("stroke_rect", framebuffer_count, raster_iterations, function(iteration)
         local x = (iteration * 17) % math.max(1, width)
         local y = (iteration * 31) % math.max(1, height)
-        stroke_rect(x, y, 24, 18, "#d08040")
+        active:stroke_rect(x, y, 24, 18, "#d08040")
     end)
 
     run_raster_case("stroke_circle", framebuffer_count, raster_iterations, function(iteration)
         local x = (iteration * 19) % math.max(1, width)
         local y = (iteration * 23) % math.max(1, height)
-        stroke_circle(x, y, 12, "#70c0e0")
+        active:stroke_circle(x, y, 12, "#70c0e0")
     end)
 
     local shape_iterations = math.max(50, raster_iterations // 4)
     run_raster_case("arc", framebuffer_count, shape_iterations, function(iteration)
         local x = (iteration * 19) % math.max(1, width)
         local y = (iteration * 23) % math.max(1, height)
-        draw_arc(x, y, 16, 25, 300, "#e0a050")
+        active:arc(x, y, 16, 25, 300, "#e0a050")
     end)
 
     run_raster_case("fill_round_rect", framebuffer_count, shape_iterations, function(iteration)
         local x = (iteration * 17) % math.max(1, width)
         local y = (iteration * 29) % math.max(1, height)
-        fill_round_rect(x, y, 30, 22, 6, "#7060d0")
+        active:fill_round_rect(x, y, 30, 22, 6, "#7060d0")
     end)
 
     run_raster_case("fill_triangle", framebuffer_count, shape_iterations, function(iteration)
         local x = (iteration * 13) % math.max(1, width)
         local y = (iteration * 31) % math.max(1, height)
-        fill_triangle(x, y, x + 24, y + 5, x + 9, y + 22, "#40b080")
+        active:fill_triangle(x, y, x + 24, y + 5, x + 9, y + 22, "#40b080")
     end)
 
     local text_iterations = math.max(50, raster_iterations // 4)
     run_raster_case("text", framebuffer_count, text_iterations, function(iteration)
         local y_range = math.max(1, height - 16)
-        draw_text((iteration * 11) % math.max(1, width), (iteration * 17) % y_range, "Display 0123456789")
+        active:text((iteration * 11) % math.max(1, width), (iteration * 17) % y_range, "Display 0123456789", text_options)
     end)
 
     local pixel_size = 16
@@ -347,7 +242,7 @@ local function run_buffer_suite(framebuffer_count)
     run_raster_case("blit_16", framebuffer_count, blit_iterations, function(iteration)
         local x = (iteration * 29) % math.max(1, width)
         local y = (iteration * 37) % math.max(1, height)
-        draw_pixels(x, y, pixel_block, pixel_options)
+        active:blit(x, y, pixel_block, pixel_options)
     end)
 
     close_display()

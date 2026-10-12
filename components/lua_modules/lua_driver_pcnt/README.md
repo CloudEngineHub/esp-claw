@@ -50,4 +50,4 @@ unit:close()
 - `unit:add_channel(opts)`, `unit:start()`, `unit:stop()`, `unit:clear()`, and `unit:close()` return no values on success and raise a Lua error on failure.
 - `unit:get_count()` returns the current count as an integer.
 
-Hardware GPIOs are claimed before configuration. Occupied or unavailable resources raise an error; `close()` releases ownership only after hardware cleanup succeeds. Failed cleanup retains ownership for retry.
+Use free GPIOs suitable for the connected hardware. Occupied or unavailable resources raise an error. If `close()` fails, retry it before reusing the resources.

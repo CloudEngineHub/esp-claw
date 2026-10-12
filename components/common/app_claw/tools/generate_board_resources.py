@@ -78,6 +78,7 @@ class BoardResources:
     devices: list[tuple[str, str]] = field(default_factory=list)
     ignored_custom: list[str] = field(default_factory=list)
     groups: list = field(default_factory=list)
+    deferred_peripherals: list[str] = field(default_factory=list)
 
     def add(self, kind, a, b=0):
         resource = Resource(kind, a, b)
@@ -347,6 +348,12 @@ def parse_board(board_dir):
     peripherals = load_items(board_dir / 'board_peripherals.yaml', 'peripherals')
     devices = load_items(board_dir / 'board_devices.yaml', 'devices')
     board = BoardResources()
+    skipped, active = set(), set()
+    for item in devices.values():
+        refs = skipped if item.get('init_skip', False) else active
+        refs.update(mapping(ref, item['name']).get('name') for ref in peripheral_refs(item))
+    # Keep shared and standalone peripherals in the startup initialization list.
+    board.deferred_peripherals = sorted(peripherals.keys() & (skipped - active))
     aliases = {}
     for is_device, items in ((False, peripherals), (True, devices)):
         for item in items.values():
@@ -391,7 +398,7 @@ def render(board):
     return '\n'.join(lines) + '\n'
 
 
-def adapt_manager(source_dir, output_dir):
+def adapt_manager(source_dir, output_dir, deferred_peripherals=()):
     # Compile local copies with hooks at the actual driver calls; keep vendor files intact.
     for kind in ('periph', 'device'):
         filename = f'esp_board_{kind}.c'
@@ -417,6 +424,17 @@ def adapt_manager(source_dir, output_dir):
         # Board Manager must retain its reference when peripheral close fails.
         if kind == 'periph':
             source = source.replace('        ESP_BOARD_RETURN_ON_ERROR(ret, TAG, "Failed to deinit periph: %s", name);', '        if (ret != ESP_OK) list->ref_count++;\n        ESP_BOARD_RETURN_ON_ERROR(ret, TAG, "Failed to deinit periph: %s", name);')
+            if deferred_peripherals:
+                marker = '        ret = esp_board_periph_init(desc->name);'
+                if source.count(marker) != 1:
+                    raise BoardResourceError(f'{filename}: startup call site changed; review deferred initialization')
+                condition = ' || '.join(f'strcmp(desc->name, {json.dumps(name)}) == 0' for name in deferred_peripherals)
+                guard = ('        /* Initialize peripherals of skipped devices only on explicit request. */\n'
+                         f'        if ({condition}) {{\n'
+                         '            desc = desc->next;\n'
+                         '            continue;\n'
+                         '        }\n')
+                source = source.replace(marker, guard + marker, 1)
         target = output_dir / filename
         if not target.exists() or target.read_text() != source:
             target.write_text(source)
@@ -439,7 +457,7 @@ def main(argv=None):
             temporary.write_text(content)
             temporary.replace(args.output)
         if args.manager_dir:
-            adapt_manager(args.manager_dir, args.output.parent)
+            adapt_manager(args.manager_dir, args.output.parent, board.deferred_peripherals)
         if board.ignored_custom:
             print('Hardware resources: custom devices ignored: ' + ', '.join(board.ignored_custom), file=sys.stderr)
     except (BoardResourceError, OSError, yaml.YAMLError) as error:

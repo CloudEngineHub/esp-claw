@@ -218,7 +218,8 @@ static int lua_module_led_strip_new(lua_State *L)
     *ud = (lua_module_led_strip_ud_t){0};
     luaL_setmetatable(L, LUA_MODULE_LED_STRIP_METATABLE);
     err = cap_lua_hw_claim_gpio(L, &ud->lease, "lua/led_strip", gpio);
-    if (err != ESP_OK) return luaL_error(L, "led_strip claim failed: %s", esp_err_to_name(err));
+    if (err == CLAW_HW_ERR_CONFLICT) return luaL_error(L, "led_strip claim failed: GPIO %d is already in use", gpio);
+    if (err != ESP_OK) return luaL_error(L, "led_strip claim failed: GPIO %d: %s (code %d)", gpio, esp_err_to_name(err), (int)err);
     err = led_strip_new_rmt_device(&strip_config, &rmt_config, &ud->strip);
     if (err != ESP_OK) {
         (void)led_strip_close(ud);

@@ -364,14 +364,14 @@ static int cmd_hwmap(int argc, char **argv)
         capacity = count;
     }
     if (err == ESP_OK) {
-        printf("%-10s %-28s %-5s %-10s %s\n", "POLICY", "RESOURCE", "USERS", "CLAIM", "OWNER");
+        printf("%-28s %-10s %-9s %-10s %s\n", "RESOURCE", "SHARING", "USE_COUNT", "CLAIM_ID", "USED_BY");
         for (size_t i = 0; i < count; i++) {
             const claw_hw_entry_t *entry = &entries[i];
-            printf("%-10s %-28s %-5u %-10" PRIu64 " %s\n",
-                   entry->policy == CLAW_HW_SHARED ? "SHARED" : "EXCLUSIVE", entry->resource,
+            printf("%-28s %-10s %-9u %-10" PRIu64 " %s\n",
+                   entry->resource, entry->policy == CLAW_HW_SHARED ? "SHARED" : "EXCLUSIVE",
                    (unsigned)entry->users, entry->claim_id, entry->owner[0] ? entry->owner : "(free)");
         }
-        printf("(%u entries)\n", (unsigned)count);
+        printf("(%u rows)\n", (unsigned)count);
     } else {
         printf("hwmap: %s\n", esp_err_to_name(err));
     }

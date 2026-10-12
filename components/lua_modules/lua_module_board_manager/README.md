@@ -6,15 +6,12 @@
 
 - `board_manager.get_board_info()` returns `{ name, chip, version, description, manufacturer }`.
 - `board_manager.get_camera_paths()` returns `{ dev_path, meta_path }`; `meta_path` may be absent.
-- `board_manager.get_device_config_handle(name)` returns an opaque configuration handle. It cannot be inspected as a Lua table or used to open a device.
 
-These calls return `nil, err` when the requested information is unavailable. Invalid arguments raise Lua errors.
+Both functions take no arguments and return `nil, err` when the requested information is unavailable. Missing board metadata fields are returned as empty strings.
 
-## Device access
+`get_camera_paths()` queries the board camera only. The camera must already be initialized by the firmware; this call does not initialize it. Unsupported or uninitialized cameras return `nil, err`. Use `camera.list_devices()` to discover available capture devices, including external cameras.
 
-`init_device`, `deinit_device`, `get_device_handle`, `get_display_lcd_params`, `get_audio_codec_input_params`, and `get_audio_codec_output_params` currently raise an unsupported-operation error. Use `display`, `audio`, `camera`, or the appropriate sensor module to access hardware.
-
-The module also exports `PANEL_IF_IO`, `PANEL_IF_RGB`, `PANEL_IF_MIPI_DSI`, `PIXEL_FORMAT_RGB565`, and `PIXEL_FORMAT_RGB888`; these constants do not enable device access.
+This module only reads information. Use `display`, `lvgl`, `audio`, `camera`, or the appropriate sensor module to access hardware.
 
 ## Example
 

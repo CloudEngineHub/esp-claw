@@ -113,13 +113,6 @@ local function draw_status_overlay(stats)
     end
 end
 
-local panel_handle, io_handle, lcd_width, lcd_height, panel_if =
-    board_manager.get_display_lcd_params("display_lcd")
-if not panel_handle then
-    print(TAG .. " SKIP: get_display_lcd_params failed: " .. tostring(io_handle))
-    return
-end
-
 local camera_devices = camera.list_devices()
 if #camera_devices == 0 then
     print(TAG .. " SKIP: no capture video device available")

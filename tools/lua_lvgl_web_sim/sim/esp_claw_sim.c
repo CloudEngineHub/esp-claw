@@ -29,9 +29,6 @@
 extern esp_err_t lua_lvgl_deinit_runtime(void);
 extern void sim_esp_compat_pump_once(void);
 
-#define SIM_DEFAULT_WIDTH 800
-#define SIM_DEFAULT_HEIGHT 480
-
 typedef struct {
     uint8_t r;
     uint8_t g;
@@ -40,9 +37,6 @@ typedef struct {
 } sim_color_t;
 
 static lua_State *s_lua;
-static const uintptr_t SIM_PANEL_HANDLE = 0xEC1A0001u;
-static const uintptr_t SIM_IO_HANDLE = 0xEC1A0002u;
-static const uintptr_t SIM_AUDIO_CODEC_HANDLE = 0xEC1A0004u;
 
 static bool sim_stop_requested(void)
 {
@@ -207,22 +201,6 @@ static int sim_polled_touch_delta_y(void)
     });
 }
 
-static int sim_canvas_width(void)
-{
-    int width = EM_ASM_INT({
-        return Module.canvas ? (Module.canvas.width | 0) : 0;
-    });
-    return width > 0 ? width : SIM_DEFAULT_WIDTH;
-}
-
-static int sim_canvas_height(void)
-{
-    int height = EM_ASM_INT({
-        return Module.canvas ? (Module.canvas.height | 0) : 0;
-    });
-    return height > 0 ? height : SIM_DEFAULT_HEIGHT;
-}
-
 static void sim_canvas_clear(sim_color_t color)
 {
     EM_ASM({
@@ -276,25 +254,20 @@ static bool get_int_field(lua_State *L, int index, const char *field, int *out)
     return found;
 }
 
-static int lua_board_get_display_lcd_params(lua_State *L)
+static int lua_board_get_board_info(lua_State *L)
 {
-    (void)luaL_optstring(L, 1, "display_lcd");
-    lua_pushlightuserdata(L, (void *)SIM_PANEL_HANDLE);
-    lua_pushlightuserdata(L, (void *)SIM_IO_HANDLE);
-    lua_pushinteger(L, sim_canvas_width());
-    lua_pushinteger(L, sim_canvas_height());
-    lua_pushinteger(L, 1);
-    return 5;
-}
-
-static int lua_board_get_audio_codec_output_params(lua_State *L)
-{
-    (void)luaL_optstring(L, 1, "audio_dac");
-    lua_pushlightuserdata(L, (void *)SIM_AUDIO_CODEC_HANDLE);
-    lua_pushinteger(L, 16000);
-    lua_pushinteger(L, 1);
-    lua_pushinteger(L, 16);
-    return 4;
+    lua_newtable(L);
+    lua_pushstring(L, "esp_claw_web_sim");
+    lua_setfield(L, -2, "name");
+    lua_pushstring(L, "wasm");
+    lua_setfield(L, -2, "chip");
+    lua_pushstring(L, "");
+    lua_setfield(L, -2, "version");
+    lua_pushstring(L, "ESP-Claw browser simulator");
+    lua_setfield(L, -2, "description");
+    lua_pushstring(L, "");
+    lua_setfield(L, -2, "manufacturer");
+    return 1;
 }
 
 static int lua_board_get_camera_paths(lua_State *L)
@@ -302,26 +275,17 @@ static int lua_board_get_camera_paths(lua_State *L)
     lua_newtable(L);
     lua_pushstring(L, "/dev/sim_camera0");
     lua_setfield(L, -2, "dev_path");
-    lua_pushstring(L, "/dev/sim_camera0");
-    lua_setfield(L, -2, "path");
     return 1;
 }
 
 static int luaopen_board_manager(lua_State *L)
 {
-    lua_newtable(L);
-    lua_pushcfunction(L, lua_board_get_display_lcd_params);
-    lua_setfield(L, -2, "get_display_lcd_params");
-    lua_pushcfunction(L, lua_board_get_audio_codec_output_params);
-    lua_setfield(L, -2, "get_audio_codec_output_params");
-    lua_pushcfunction(L, lua_board_get_camera_paths);
-    lua_setfield(L, -2, "get_camera_paths");
-    lua_pushinteger(L, 0);
-    lua_setfield(L, -2, "PANEL_IF_IO");
-    lua_pushinteger(L, 1);
-    lua_setfield(L, -2, "PANEL_IF_RGB");
-    lua_pushinteger(L, 2);
-    lua_setfield(L, -2, "PANEL_IF_MIPI_DSI");
+    static const luaL_Reg funcs[] = {
+        {"get_board_info", lua_board_get_board_info},
+        {"get_camera_paths", lua_board_get_camera_paths},
+        {NULL, NULL},
+    };
+    luaL_newlib(L, funcs);
     return 1;
 }
 

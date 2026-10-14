@@ -13,5 +13,4 @@ idf_component_register(
         console
         esp_timer
         freertos
-        georgik__lua
 )

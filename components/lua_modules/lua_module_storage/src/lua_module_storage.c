@@ -16,7 +16,6 @@
 #include "lauxlib.h"
 #include "cap_lua.h"
 #include "claw_paths.h"
-#include "esp_vfs_fat.h"
 
 /* The writable data root is owned by claw_paths; resolve it on each call so the
  * module always sees the current mount point (flash partition or SD card). */
@@ -300,7 +299,8 @@ static int lua_module_storage_get_free_space(lua_State *L)
         return luaL_error(L, "storage root is not configured");
     }
 
-    esp_err_t err = esp_vfs_fat_info(base_path, &total, &free_bytes);
+    /* Use the DATA backend registered by the application. */
+    esp_err_t err = claw_paths_get_space(CLAW_PATH_DATA, &total, &free_bytes);
 
     if (err != ESP_OK) {
         return luaL_error(L, "failed to query storage free space: %s", esp_err_to_name(err));

@@ -13,6 +13,7 @@ idf_component_register(
     INCLUDE_DIRS
         "include"
         "src"
+    # app_claw discovers the local registry; expose it to cap_lua users.
     REQUIRES
         claw_hw_registry
         claw_cap
@@ -20,5 +21,4 @@ idf_component_register(
         console
         esp_timer
         freertos
-        georgik__lua
 )

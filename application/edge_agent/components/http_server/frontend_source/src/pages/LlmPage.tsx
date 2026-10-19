@@ -116,7 +116,7 @@ const PROVIDER_PRESETS: Record<PresetKey, ProviderPreset> = {
   },
   minimax_global: {
     llm_backend_type: 'anthropic_compatible',
-    llm_base_url: 'https://api.minimaxi.io/anthropic',
+    llm_base_url: 'https://api.minimax.io/anthropic/v1',
     llm_auth_type: 'none',
     llm_max_tokens_field: 'max_tokens',
     llm_default_image_max_bytes: '524288',
@@ -128,7 +128,7 @@ const PROVIDER_PRESETS: Record<PresetKey, ProviderPreset> = {
   },
   minimax_cn: {
     llm_backend_type: 'anthropic_compatible',
-    llm_base_url: 'https://api.minimaxi.com/anthropic',
+    llm_base_url: 'https://api.minimaxi.com/anthropic/v1',
     llm_auth_type: 'none',
     llm_max_tokens_field: 'max_tokens',
     llm_default_image_max_bytes: '524288',

@@ -25,6 +25,7 @@ import { Button } from '../components/ui/Button';
 import { TextInput } from '../components/ui/FormField';
 import { LabelLink } from '../components/ui/LabelLink';
 import { getProviderLinks } from '../constants/externalLinks';
+import { WECHAT_DEFAULT_BASE_URL, WECHAT_DEFAULT_CDN_BASE_URL } from '../constants/wechat';
 import { SearchFields, type SearchConfig } from '../components/system/SearchFields';
 import { t } from '../i18n';
 import { appConfig, ensureConfigGroups, saveConfig, configGeneration } from '../state/config';
@@ -232,7 +233,6 @@ const PRESET_BUTTONS: ProviderKey[] = [
 ];
 
 const PLATFORM_ORDER: PlatformId[] = ['wechat', 'feishu', 'qq', 'telegram'];
-const WECHAT_DEFAULT_CDN_BASE_URL = 'https://novac2c.cdn.weixin.qq.com/c2c';
 
 function llmFromConfig(config: Partial<AppConfig>): LlmForm {
   return {
@@ -602,6 +602,9 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
         llmBaseline = llmToPatch(nextLlm);
         imBaseline = imToPatch(nextIm);
         searchBaseline = searchToPatch(nextSearch);
+        // Keep the stored baseline so repaired URLs are saved with this step.
+        setImForm('wechat_base_url', nextIm.wechat_base_url.trim() || WECHAT_DEFAULT_BASE_URL);
+        setImForm('wechat_cdn_base_url', nextIm.wechat_cdn_base_url.trim() || WECHAT_DEFAULT_CDN_BASE_URL);
         setSelectedPlatforms(selectedPlatformsFromForm(nextIm));
         setWechatAdvancedOpen(
           !!(nextIm.wechat_token || nextIm.wechat_base_url || nextIm.wechat_account_id),
@@ -821,8 +824,8 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
     setSelectedPlatforms((prev) => prev.filter((item) => item !== id));
     if (id === 'wechat') {
       setImForm('wechat_token', '');
-      setImForm('wechat_base_url', '');
-      setImForm('wechat_cdn_base_url', '');
+      setImForm('wechat_base_url', WECHAT_DEFAULT_BASE_URL);
+      setImForm('wechat_cdn_base_url', WECHAT_DEFAULT_CDN_BASE_URL);
       setImForm('wechat_account_id', '');
     } else if (id === 'feishu') {
       setImForm('feishu_app_id', '');
@@ -838,7 +841,7 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
   const onWechatLoginComplete = (data: WechatLoginStatus) => {
     batch(() => {
       if (data.token) setImForm('wechat_token', data.token);
-      if (data.base_url) setImForm('wechat_base_url', data.base_url);
+      setImForm('wechat_base_url', data.base_url?.trim() || WECHAT_DEFAULT_BASE_URL);
       if (data.account_id) setImForm('wechat_account_id', data.account_id);
       if (!imForm.wechat_cdn_base_url.trim()) {
         setImForm('wechat_cdn_base_url', WECHAT_DEFAULT_CDN_BASE_URL);
@@ -910,14 +913,14 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
                   label={t('wechatBaseUrl')}
                   placeholder={t('wechatBaseUrlPlaceholder') as string}
                   value={imForm.wechat_base_url}
-                  onInput={(e) => setImForm('wechat_base_url', e.currentTarget.value)}
+                  readOnly
                 />
                 <TextInput
                   type="url"
                   label={t('wechatCdnBaseUrl')}
                   placeholder={t('wechatCdnBaseUrlPlaceholder') as string}
                   value={imForm.wechat_cdn_base_url}
-                  onInput={(e) => setImForm('wechat_cdn_base_url', e.currentTarget.value)}
+                  readOnly
                 />
               </div>
             </Show>

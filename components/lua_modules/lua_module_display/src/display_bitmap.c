@@ -110,6 +110,15 @@ esp_err_t display_bitmap_draw(display_raster_t *r, int x, int y, const display_b
     bool copy = o->opacity == 255 && sw == dw && sh == dh &&
                 ((r->bpp == 2 && view->format == DISPLAY_BITMAP_RGB565) ||
                  (r->bpp == 3 && view->format == DISPLAY_BITMAP_BGR888));
+    if (copy) {
+        /* Unscaled strips need no per-row coordinate division. */
+        size_t bytes = (size_t)(right - left) * bpp;
+        const uint8_t *src = view->pixels + (size_t)(sy + top - dy) * stride + (size_t)(sx + left - dx) * bpp;
+        uint8_t *dst = r->pixels + (size_t)top * r->stride + (size_t)left * r->bpp;
+        for (int row = 0; row < bottom - top; row++) memcpy(dst + (size_t)row * r->stride, src + (size_t)row * stride, bytes);
+        display_dirty_mark(r->dirty, (int)left, (int)top, (int)(right - left), (int)(bottom - top));
+        return ESP_OK;
+    }
     /* Exact integer stepping avoids division in the inner pixel loop. */
     int step = sw / dw, remainder = sw % dw;
     int source_left = sx + (int)((left - dx) * sw / dw);
@@ -118,10 +127,6 @@ esp_err_t display_bitmap_draw(display_raster_t *r, int x, int y, const display_b
         int source_y = sy + (int)(((int64_t)yy - dy) * sh / dh);
         const uint8_t *row = view->pixels + (size_t)source_y * stride;
         uint8_t *dst = r->pixels + (size_t)yy * r->stride + (size_t)left * r->bpp;
-        if (copy) {
-            memcpy(dst, row + (size_t)source_left * bpp, (size_t)(right - left) * bpp);
-            continue;
-        }
         int source_x = source_left;
         int64_t error = initial_error;
         for (int xx = (int)left; xx < right; xx++, dst += r->bpp) {

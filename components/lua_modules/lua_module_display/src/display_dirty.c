@@ -63,6 +63,9 @@ void display_dirty_mark(display_dirty_region_t *dirty, int x, int y, int width, 
 
     display_dirty_rect_t next = {.x = x, .y = y, .width = width, .height = height};
     for (size_t i = 0; i < dirty->count;) {
+        const display_dirty_rect_t *rect = &dirty->rects[i];
+        if (next.x >= rect->x && next.y >= rect->y && next.x + next.width <= rect->x + rect->width &&
+            next.y + next.height <= rect->y + rect->height) return;
         if (!should_merge(&dirty->rects[i], &next)) {
             ++i;
             continue;

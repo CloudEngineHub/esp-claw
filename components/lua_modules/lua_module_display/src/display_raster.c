@@ -37,12 +37,35 @@ static void write_rgb565_opaque(uint16_t *dst, uint16_t value, size_t count)
     if (count & 1U) ((uint16_t *)(dst32 + count / 2))[0] = value;
 }
 
+static void blend_rgb565_run(uint16_t *pixels, size_t count, display_color_t color)
+{
+    /* Constant-color spans share the same exact channel blend tables. */
+    uint8_t channels[128];
+    uint32_t a = color.a, inv = 255U - a;
+    uint32_t red = (color.r >> 3) * a + 127U;
+    uint32_t green = (color.g >> 2) * a + 127U;
+    uint32_t blue = (color.b >> 3) * a + 127U;
+    for (uint32_t i = 0; i < 64; ++i) {
+        channels[32 + i] = ((green + i * inv) * 0x8081U) >> 23;
+        if (i < 32) {
+            channels[i] = ((red + i * inv) * 0x8081U) >> 23;
+            channels[96 + i] = ((blue + i * inv) * 0x8081U) >> 23;
+        }
+    }
+    for (size_t i = 0; i < count; ++i) {
+        uint16_t value = pixels[i];
+        pixels[i] = (channels[value >> 11] << 11) | (channels[32 + ((value >> 5) & 63)] << 5) | channels[96 + (value & 31)];
+    }
+}
+
 static void write_run(display_raster_t *r, uint8_t *dst, size_t count, const display_raster_pen_t *pen)
 {
     if (r->bpp == 2) {
         uint16_t *pixels = (uint16_t *)dst;
         if (pen->color.a == 255) {
             write_rgb565_opaque(pixels, pen->rgb565, count);
+        } else if (count >= 128) {
+            blend_rgb565_run(pixels, count, pen->color);
         } else {
             for (size_t i = 0; i < count; ++i) pixels[i] = display_color_blend_rgb565(pixels[i], pen->color);
         }
@@ -355,6 +378,10 @@ static void round_rect(display_raster_t *r, int x, int y, int w, int h, int radi
 
 void display_raster_fill_round_rect(display_raster_t *r, int x, int y, int w, int h, int radius, display_color_t c)
 {
+    if (radius == 0) {
+        display_raster_fill_rect(r, x, y, w, h, c);
+        return;
+    }
     round_rect(r, x, y, w, h, radius, true, c);
 }
 

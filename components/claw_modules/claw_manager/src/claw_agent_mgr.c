@@ -108,6 +108,7 @@ typedef struct {
     claw_core_config_t core_config;
     char *api_key;
     char *backend_type;
+    char *endpoint_provider;
     char *model;
     char *base_url;
     char *auth_type;
@@ -170,6 +171,7 @@ static void claw_agent_mgr_free_config_storage(void)
 {
     free(s_mgr.api_key);
     free(s_mgr.backend_type);
+    free(s_mgr.endpoint_provider);
     free(s_mgr.model);
     free(s_mgr.base_url);
     free(s_mgr.auth_type);
@@ -325,20 +327,21 @@ static claw_agent_mgr_agent_t *claw_agent_mgr_alloc_locked(claw_agent_mgr_role_t
 
 static esp_err_t claw_agent_mgr_copy_core_config(const claw_core_config_t *config)
 {
-    if (!config || !config->api_key || !config->model || !config->backend_type ||
+    if (!config || !config->model || !config->backend_type ||
             !config->system_prompt) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    s_mgr.api_key = claw_agent_mgr_strdup(config->api_key);
+    s_mgr.api_key = claw_agent_mgr_strdup(config->api_key ? config->api_key : "");
     s_mgr.backend_type = claw_agent_mgr_strdup(config->backend_type);
+    s_mgr.endpoint_provider = claw_agent_mgr_strdup(config->endpoint_provider ? config->endpoint_provider : "");
     s_mgr.model = claw_agent_mgr_strdup(config->model);
     s_mgr.base_url = claw_agent_mgr_strdup(config->base_url ? config->base_url : "");
     s_mgr.auth_type = claw_agent_mgr_strdup(config->auth_type ? config->auth_type : "");
     s_mgr.max_tokens_field = claw_agent_mgr_strdup(config->max_tokens_field ? config->max_tokens_field : "");
     s_mgr.reasoning_effort = claw_agent_mgr_strdup(config->reasoning_effort ? config->reasoning_effort : "");
     s_mgr.system_prompt = claw_agent_mgr_strdup(config->system_prompt);
-    if (!s_mgr.api_key || !s_mgr.backend_type || !s_mgr.model ||
+    if (!s_mgr.api_key || !s_mgr.backend_type || !s_mgr.endpoint_provider || !s_mgr.model ||
             !s_mgr.base_url || !s_mgr.auth_type || !s_mgr.max_tokens_field || !s_mgr.reasoning_effort ||
             !s_mgr.system_prompt) {
         return ESP_ERR_NO_MEM;
@@ -347,6 +350,7 @@ static esp_err_t claw_agent_mgr_copy_core_config(const claw_core_config_t *confi
     s_mgr.core_config = *config;
     s_mgr.core_config.api_key = s_mgr.api_key;
     s_mgr.core_config.backend_type = s_mgr.backend_type;
+    s_mgr.core_config.endpoint_provider = s_mgr.endpoint_provider;
     s_mgr.core_config.model = s_mgr.model;
     s_mgr.core_config.base_url = s_mgr.base_url;
     s_mgr.core_config.auth_type = s_mgr.auth_type;
@@ -459,6 +463,7 @@ esp_err_t claw_agent_mgr_update_core_config(const claw_core_config_t *core_confi
 {
     char *api_key = NULL;
     char *backend_type = NULL;
+    char *endpoint_provider = NULL;
     char *model = NULL;
     char *base_url = NULL;
     char *auth_type = NULL;
@@ -477,13 +482,14 @@ esp_err_t claw_agent_mgr_update_core_config(const claw_core_config_t *core_confi
 
     api_key = claw_agent_mgr_strdup(core_config->api_key ? core_config->api_key : "");
     backend_type = claw_agent_mgr_strdup(core_config->backend_type ? core_config->backend_type : "");
+    endpoint_provider = claw_agent_mgr_strdup(core_config->endpoint_provider ? core_config->endpoint_provider : "");
     model = claw_agent_mgr_strdup(core_config->model ? core_config->model : "");
     base_url = claw_agent_mgr_strdup(core_config->base_url ? core_config->base_url : "");
     auth_type = claw_agent_mgr_strdup(core_config->auth_type ? core_config->auth_type : "");
     max_tokens_field = claw_agent_mgr_strdup(core_config->max_tokens_field ? core_config->max_tokens_field : "");
     reasoning_effort = claw_agent_mgr_strdup(core_config->reasoning_effort ? core_config->reasoning_effort : "");
     system_prompt = claw_agent_mgr_strdup(core_config->system_prompt);
-    if (!api_key || !backend_type || !model || !base_url ||
+    if (!api_key || !backend_type || !endpoint_provider || !model || !base_url ||
             !auth_type || !max_tokens_field || !reasoning_effort || !system_prompt) {
         err = ESP_ERR_NO_MEM;
         goto fail;
@@ -492,6 +498,7 @@ esp_err_t claw_agent_mgr_update_core_config(const claw_core_config_t *core_confi
     next_config = *core_config;
     next_config.api_key = api_key;
     next_config.backend_type = backend_type;
+    next_config.endpoint_provider = endpoint_provider;
     next_config.model = model;
     next_config.base_url = base_url;
     next_config.auth_type = auth_type;
@@ -502,6 +509,7 @@ esp_err_t claw_agent_mgr_update_core_config(const claw_core_config_t *core_confi
     claw_agent_mgr_lock();
     free(s_mgr.api_key);
     free(s_mgr.backend_type);
+    free(s_mgr.endpoint_provider);
     free(s_mgr.model);
     free(s_mgr.base_url);
     free(s_mgr.auth_type);
@@ -510,6 +518,7 @@ esp_err_t claw_agent_mgr_update_core_config(const claw_core_config_t *core_confi
     free(s_mgr.system_prompt);
     s_mgr.api_key = api_key;
     s_mgr.backend_type = backend_type;
+    s_mgr.endpoint_provider = endpoint_provider;
     s_mgr.model = model;
     s_mgr.base_url = base_url;
     s_mgr.auth_type = auth_type;
@@ -519,6 +528,7 @@ esp_err_t claw_agent_mgr_update_core_config(const claw_core_config_t *core_confi
     s_mgr.core_config = next_config;
     api_key = NULL;
     backend_type = NULL;
+    endpoint_provider = NULL;
     model = NULL;
     base_url = NULL;
     auth_type = NULL;
@@ -543,6 +553,7 @@ esp_err_t claw_agent_mgr_update_core_config(const claw_core_config_t *core_confi
 fail:
     free(api_key);
     free(backend_type);
+    free(endpoint_provider);
     free(model);
     free(base_url);
     free(auth_type);

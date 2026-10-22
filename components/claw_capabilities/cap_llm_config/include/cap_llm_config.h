@@ -19,6 +19,7 @@ extern "C" {
 typedef struct {
     char api_key[CAP_LLM_CONFIG_STR_LEN];
     char backend_type[CAP_LLM_CONFIG_SHORT_STR_LEN];
+    char endpoint_provider[CAP_LLM_CONFIG_SHORT_STR_LEN];
     char model[CAP_LLM_CONFIG_MODEL_LEN];
     char base_url[CAP_LLM_CONFIG_STR_LEN];
     char auth_type[CAP_LLM_CONFIG_SHORT_STR_LEN];

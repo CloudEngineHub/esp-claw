@@ -66,6 +66,7 @@ type LlmForm = {
   llm_timeout_ms: string;
   llm_max_tokens: string;
   llm_backend_type: string;
+  llm_endpoint_provider: string;
   llm_base_url: string;
   llm_auth_type: string;
   llm_default_image_max_bytes: string;
@@ -94,6 +95,7 @@ type SearchForm = SearchConfig & {
 
 type ProviderPreset = {
   llm_backend_type: string;
+  llm_endpoint_provider: string;
   llm_base_url: string;
   llm_auth_type: string;
   llm_default_image_max_bytes: string;
@@ -108,6 +110,7 @@ type ProviderPreset = {
 const PROVIDER_PRESETS: Record<ProviderKey, ProviderPreset> = {
   openai: {
     llm_backend_type: 'openai_responses',
+    llm_endpoint_provider: 'static',
     llm_base_url: 'https://api.openai.com/v1',
     llm_auth_type: 'bearer',
     llm_default_image_max_bytes: '524288',
@@ -120,6 +123,7 @@ const PROVIDER_PRESETS: Record<ProviderKey, ProviderPreset> = {
   },
   bailian: {
     llm_backend_type: 'openai_compatible',
+    llm_endpoint_provider: 'static',
     llm_base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     llm_auth_type: 'bearer',
     llm_default_image_max_bytes: '524288',
@@ -131,6 +135,7 @@ const PROVIDER_PRESETS: Record<ProviderKey, ProviderPreset> = {
   },
   deepseek: {
     llm_backend_type: 'openai_compatible',
+    llm_endpoint_provider: 'static',
     llm_base_url: 'https://api.deepseek.com',
     llm_auth_type: 'bearer',
     llm_default_image_max_bytes: '524288',
@@ -142,8 +147,9 @@ const PROVIDER_PRESETS: Record<ProviderKey, ProviderPreset> = {
   },
   anthropic: {
     llm_backend_type: 'anthropic_compatible',
+    llm_endpoint_provider: 'static',
     llm_base_url: 'https://api.anthropic.com/v1',
-    llm_auth_type: 'none',
+    llm_auth_type: 'api-key',
     llm_default_image_max_bytes: '524288',
     llm_max_tokens_field: 'max_tokens',
     llm_supports_tools: 'true',
@@ -153,6 +159,7 @@ const PROVIDER_PRESETS: Record<ProviderKey, ProviderPreset> = {
   },
   kimi_global: {
     llm_backend_type: 'openai_compatible',
+    llm_endpoint_provider: 'static',
     llm_base_url: 'https://api.moonshot.ai/v1',
     llm_auth_type: 'bearer',
     llm_default_image_max_bytes: '524288',
@@ -164,6 +171,7 @@ const PROVIDER_PRESETS: Record<ProviderKey, ProviderPreset> = {
   },
   kimi_cn: {
     llm_backend_type: 'openai_compatible',
+    llm_endpoint_provider: 'static',
     llm_base_url: 'https://api.moonshot.cn/v1',
     llm_auth_type: 'bearer',
     llm_default_image_max_bytes: '524288',
@@ -175,8 +183,9 @@ const PROVIDER_PRESETS: Record<ProviderKey, ProviderPreset> = {
   },
   minimax_global: {
     llm_backend_type: 'anthropic_compatible',
+    llm_endpoint_provider: 'static',
     llm_base_url: 'https://api.minimax.io/anthropic/v1',
-    llm_auth_type: 'none',
+    llm_auth_type: 'api-key',
     llm_default_image_max_bytes: '524288',
     llm_max_tokens_field: 'max_tokens',
     llm_supports_tools: 'true',
@@ -186,8 +195,9 @@ const PROVIDER_PRESETS: Record<ProviderKey, ProviderPreset> = {
   },
   minimax_cn: {
     llm_backend_type: 'anthropic_compatible',
+    llm_endpoint_provider: 'static',
     llm_base_url: 'https://api.minimaxi.com/anthropic/v1',
-    llm_auth_type: 'none',
+    llm_auth_type: 'api-key',
     llm_default_image_max_bytes: '524288',
     llm_max_tokens_field: 'max_tokens',
     llm_supports_tools: 'true',
@@ -197,6 +207,7 @@ const PROVIDER_PRESETS: Record<ProviderKey, ProviderPreset> = {
   },
   openai_compatible: {
     llm_backend_type: 'openai_compatible',
+    llm_endpoint_provider: 'static',
     llm_base_url: 'https://api.openai.com/v1',
     llm_auth_type: 'bearer',
     llm_default_image_max_bytes: '524288',
@@ -208,8 +219,9 @@ const PROVIDER_PRESETS: Record<ProviderKey, ProviderPreset> = {
   },
   anthropic_compatible: {
     llm_backend_type: 'anthropic_compatible',
+    llm_endpoint_provider: 'static',
     llm_base_url: 'https://api.anthropic.com/v1',
-    llm_auth_type: 'none',
+    llm_auth_type: 'api-key',
     llm_default_image_max_bytes: '524288',
     llm_max_tokens_field: 'max_tokens',
     llm_supports_tools: 'true',
@@ -241,6 +253,7 @@ function llmFromConfig(config: Partial<AppConfig>): LlmForm {
     llm_timeout_ms: config.llm_timeout_ms ?? '',
     llm_max_tokens: config.llm_max_tokens ?? '',
     llm_backend_type: config.llm_backend_type ?? '',
+    llm_endpoint_provider: config.llm_endpoint_provider || 'static',
     llm_base_url: config.llm_base_url ?? '',
     llm_auth_type: config.llm_auth_type ?? '',
     llm_default_image_max_bytes: config.llm_default_image_max_bytes ?? '',
@@ -283,6 +296,7 @@ function llmToPatch(form: LlmForm): Partial<AppConfig> {
     llm_timeout_ms: form.llm_timeout_ms.trim(),
     llm_max_tokens: form.llm_max_tokens.trim(),
     llm_backend_type: form.llm_backend_type.trim(),
+    llm_endpoint_provider: form.llm_endpoint_provider.trim(),
     llm_base_url: form.llm_base_url.trim(),
     llm_auth_type: form.llm_auth_type.trim(),
     llm_default_image_max_bytes: form.llm_default_image_max_bytes.trim(),
@@ -636,6 +650,7 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
     const preset = PROVIDER_PRESETS[key];
     setProvider(key);
     setLlmForm('llm_backend_type', preset.llm_backend_type);
+    setLlmForm('llm_endpoint_provider', preset.llm_endpoint_provider);
     setLlmForm('llm_base_url', preset.llm_base_url);
     setLlmForm('llm_auth_type', preset.llm_auth_type);
     setLlmForm('llm_default_image_max_bytes', preset.llm_default_image_max_bytes);
@@ -681,10 +696,14 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
 
   const saveLlm = async () => {
     const requiredFields: Array<[string, string]> = [
-      [llmForm.llm_api_key, t('llmApiKey') as string],
       [llmForm.llm_model, t('llmModel') as string],
-      [llmForm.llm_base_url, t('llmBaseUrl') as string],
     ];
+    if (!llmForm.llm_endpoint_provider || llmForm.llm_endpoint_provider === 'static') {
+      requiredFields.push([llmForm.llm_base_url, t('llmBaseUrl') as string]);
+      if (llmForm.llm_auth_type !== 'none') {
+        requiredFields.push([llmForm.llm_api_key, t('llmApiKey') as string]);
+      }
+    }
 
     if (isAdvancedProvider(provider())) {
       requiredFields.push([llmForm.llm_backend_type, t('llmBackend') as string]);

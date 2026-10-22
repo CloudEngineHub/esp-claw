@@ -32,6 +32,7 @@ typedef struct {
 
 #define APP_DEFAULT_LLM_API_KEY              ""
 #define APP_DEFAULT_LLM_BACKEND_TYPE         ""
+#define APP_DEFAULT_LLM_ENDPOINT_PROVIDER    "static"
 #define APP_DEFAULT_LLM_MODEL                ""
 #define APP_DEFAULT_LLM_BASE_URL             ""
 #define APP_DEFAULT_LLM_AUTH_TYPE            ""
@@ -70,6 +71,7 @@ static const app_config_field_t s_fields[] = {
     APP_CONFIG_FIELD(ap_behavior, "ap_behavior", "keep"),
     APP_CONFIG_FIELD(llm_api_key, "llm_api_key", APP_DEFAULT_LLM_API_KEY),
     APP_CONFIG_FIELD(llm_backend_type, "llm_backend", APP_DEFAULT_LLM_BACKEND_TYPE),
+    APP_CONFIG_FIELD(llm_endpoint_provider, "llm_endpoint", APP_DEFAULT_LLM_ENDPOINT_PROVIDER),
     APP_CONFIG_FIELD(llm_model, "llm_model", APP_DEFAULT_LLM_MODEL),
     APP_CONFIG_FIELD(llm_base_url, "llm_base_url", APP_DEFAULT_LLM_BASE_URL),
     APP_CONFIG_FIELD(llm_auth_type, "llm_auth_type", APP_DEFAULT_LLM_AUTH_TYPE),
@@ -119,6 +121,32 @@ static bool app_config_ap_behavior_is_valid(const char *ap_behavior)
            strcmp(ap_behavior, "close_on_sta") == 0;
 }
 
+static esp_err_t app_config_upgrade_endpoint_settings(void)
+{
+    bool migrated = false;
+    esp_err_t err = settings_store_has_key("llm_endpoint", &migrated);
+    if (err != ESP_OK) return err;
+    if (!migrated) {
+        char backend[32];
+        char auth[32];
+        const char *provider = "static";
+        err = settings_store_get_string("llm_backend", backend, sizeof(backend), APP_DEFAULT_LLM_BACKEND_TYPE);
+        if (err != ESP_OK) return err;
+        err = settings_store_get_string("llm_auth_type", auth, sizeof(auth), "");
+        if (err != ESP_OK) return err;
+
+        if (strcmp(backend, "anthropic_compatible") == 0 &&
+                (!auth[0] || strcmp(auth, "none") == 0)) {
+            err = settings_store_set_string("llm_auth_type", "api-key");
+            if (err != ESP_OK) return err;
+        }
+        err = settings_store_set_string("llm_endpoint", provider);
+        if (err != ESP_OK) return err;
+    }
+
+    return settings_store_commit();
+}
+
 esp_err_t app_config_init(void)
 {
     char stored_version[8];
@@ -134,7 +162,7 @@ esp_err_t app_config_init(void)
     }
     if (err == ESP_OK && strcmp(stored_version, APP_CONFIG_SCHEMA_VERSION) == 0) {
         ESP_LOGI(TAG, "Using config schema version %s", stored_version);
-        return ESP_OK;
+        return app_config_upgrade_endpoint_settings();
     }
 
     if (err == ESP_ERR_NVS_TYPE_MISMATCH || err == ESP_ERR_NVS_INVALID_LENGTH) {
@@ -149,7 +177,7 @@ esp_err_t app_config_init(void)
     ESP_RETURN_ON_ERROR(settings_store_erase_all(), TAG, "Failed to reset app config");
     ESP_RETURN_ON_ERROR(settings_store_set_string(APP_CONFIG_SCHEMA_KEY, APP_CONFIG_SCHEMA_VERSION),
                         TAG, "Failed to save config schema version");
-    return ESP_OK;
+    return app_config_upgrade_endpoint_settings();
 }
 
 void app_config_load_defaults(app_config_t *config)
@@ -297,6 +325,7 @@ void app_config_to_claw(const app_config_t *config, app_claw_config_t *out)
 
     strlcpy(out->llm_api_key, config->llm_api_key, sizeof(out->llm_api_key));
     strlcpy(out->llm_backend_type, config->llm_backend_type, sizeof(out->llm_backend_type));
+    strlcpy(out->llm_endpoint_provider, config->llm_endpoint_provider, sizeof(out->llm_endpoint_provider));
     strlcpy(out->llm_model, config->llm_model, sizeof(out->llm_model));
     strlcpy(out->llm_base_url, config->llm_base_url, sizeof(out->llm_base_url));
     strlcpy(out->llm_auth_type, config->llm_auth_type, sizeof(out->llm_auth_type));

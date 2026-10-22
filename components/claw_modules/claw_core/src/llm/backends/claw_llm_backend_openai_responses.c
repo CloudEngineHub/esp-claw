@@ -18,10 +18,8 @@
 #define OPENAI_RESPONSES_PROVIDER_OUTPUT_KEY "output"
 
 typedef struct {
-    char *api_key;
+    claw_endpoint_handle_t endpoint;
     char *model;
-    char *base_url;
-    char *auth_type;
     char *reasoning_effort;
     uint32_t timeout_ms;
     uint32_t max_tokens;
@@ -51,25 +49,6 @@ static char *dup_printf(const char *fmt, ...)
     vsnprintf(buf, (size_t)needed + 1U, fmt, args);
     va_end(args);
     return buf;
-}
-
-static char *join_url(const char *base_url, const char *path)
-{
-    bool base_has_slash;
-    bool path_has_slash;
-
-    if (!base_url || !path) {
-        return NULL;
-    }
-    base_has_slash = base_url[0] && base_url[strlen(base_url) - 1U] == '/';
-    path_has_slash = path[0] == '/';
-    if (base_has_slash && path_has_slash) {
-        return dup_printf("%s%s", base_url, path + 1);
-    }
-    if (!base_has_slash && !path_has_slash) {
-        return dup_printf("%s/%s", base_url, path);
-    }
-    return dup_printf("%s%s", base_url, path);
 }
 
 static bool reasoning_effort_is_valid(const char *effort)
@@ -771,42 +750,28 @@ static esp_err_t post_responses(openai_responses_backend_ctx_t *ctx,
                                 char **out_error_message)
 {
     claw_llm_http_json_request_t request = {0};
-    char *url;
-    esp_err_t err;
 
-    url = join_url(ctx->base_url, profile->chat_path);
-    if (!url) {
-        *out_error_message = dup_printf("Out of memory building Responses API URL");
-        return ESP_ERR_NO_MEM;
-    }
-    request.url = url;
     request.body = post_data;
-    request.api_key = ctx->api_key;
-    request.auth_type = ctx->auth_type;
     request.timeout_ms = ctx->timeout_ms;
     request.abort_flag = abort_flag;
-    err = claw_llm_http_post_json(&request, out_http_response, out_error_message);
-    free(url);
-    return err;
+    return claw_llm_http_post_endpoint(ctx->endpoint, profile->chat_path, &request,
+                                       out_http_response, out_error_message);
 }
 
-static esp_err_t openai_responses_init(const claw_llm_runtime_config_t *config,
+static esp_err_t openai_responses_init(const claw_llm_backend_config_t *config,
                                        const claw_llm_model_profile_t *profile,
+                                       claw_endpoint_handle_t endpoint,
                                        void **out_backend_ctx,
                                        char **out_error_message)
 {
     openai_responses_backend_ctx_t *ctx;
     const char *effort;
 
-    if (!config || !profile || !out_backend_ctx || !out_error_message) {
+    if (!config || !profile || !endpoint || !out_backend_ctx || !out_error_message) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (!config->api_key || !config->api_key[0]) {
-        *out_error_message = dup_printf("OpenAI API key is empty");
-        return ESP_ERR_INVALID_ARG;
-    }
-    if (!config->model || !config->model[0] || !config->base_url || !config->base_url[0]) {
-        *out_error_message = dup_printf("OpenAI Responses model or base_url is empty");
+    if (!config->model || !config->model[0]) {
+        *out_error_message = dup_printf("OpenAI Responses model is empty");
         return ESP_ERR_INVALID_ARG;
     }
     effort = (config->reasoning_effort && config->reasoning_effort[0]) ?
@@ -821,20 +786,15 @@ static esp_err_t openai_responses_init(const claw_llm_runtime_config_t *config,
         *out_error_message = dup_printf("Out of memory allocating Responses backend");
         return ESP_ERR_NO_MEM;
     }
-    ctx->api_key = strdup(config->api_key);
+    ctx->endpoint = endpoint;
     ctx->model = strdup(config->model);
-    ctx->base_url = strdup(config->base_url);
-    ctx->auth_type = strdup((config->auth_type && config->auth_type[0]) ? config->auth_type : "bearer");
     ctx->reasoning_effort = strdup(effort);
     ctx->timeout_ms = config->timeout_ms;
     ctx->max_tokens = config->max_tokens;
     ctx->image_max_bytes = config->image_max_bytes;
-    if (!ctx->api_key || !ctx->model || !ctx->base_url || !ctx->auth_type || !ctx->reasoning_effort) {
+    if (!ctx->model || !ctx->reasoning_effort) {
         *out_error_message = dup_printf("Out of memory copying Responses backend config");
-        free(ctx->api_key);
         free(ctx->model);
-        free(ctx->base_url);
-        free(ctx->auth_type);
         free(ctx->reasoning_effort);
         free(ctx);
         return ESP_ERR_NO_MEM;
@@ -998,10 +958,7 @@ static void openai_responses_deinit(void *backend_ctx)
     if (!ctx) {
         return;
     }
-    free(ctx->api_key);
     free(ctx->model);
-    free(ctx->base_url);
-    free(ctx->auth_type);
     free(ctx->reasoning_effort);
     free(ctx);
 }
@@ -1018,7 +975,6 @@ static const claw_llm_backend_registration_t s_openai_responses_registration = {
     .id = CLAW_LLM_BACKEND_OPENAI_RESPONSES_ID,
     .vtable = &s_openai_responses_vtable,
     .defaults = {
-        .auth_type = CLAW_LLM_BACKEND_OPENAI_RESPONSES_AUTH_TYPE,
         .chat_path = CLAW_LLM_BACKEND_OPENAI_RESPONSES_CHAT_PATH,
         .max_tokens_field = CLAW_LLM_BACKEND_OPENAI_RESPONSES_MAX_TOKENS_FIELD,
     },

@@ -371,12 +371,14 @@ static esp_err_t test_call_cap(const char *cap_name,
     return *out_output ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
-static esp_err_t test_backend_init(const claw_llm_runtime_config_t *config,
+static esp_err_t test_backend_init(const claw_llm_backend_config_t *config,
                                    const claw_llm_model_profile_t *profile,
+                                   claw_endpoint_handle_t endpoint,
                                    void **out_backend_ctx,
                                    char **out_error_message)
 {
     (void)profile;
+    (void)endpoint;
     (void)out_error_message;
 
     test_backend_ctx_t *ctx = calloc(1, sizeof(test_backend_ctx_t));
@@ -531,7 +533,6 @@ static void ensure_backend_registered(void)
         .id = "core_interrupt_test",
         .vtable = &s_backend_vtable,
         .defaults = {
-            .auth_type = "none",
             .chat_path = "",
             .max_tokens_field = "max_tokens",
         },
@@ -550,6 +551,7 @@ static void ensure_core_ready(void)
     const claw_core_config_t config = {
         .instance_id = 0,
         .api_key = "test",
+        .base_url = "http://127.0.0.1",
         .backend_type = "core_interrupt_test",
         .model = "test",
         .system_prompt = "system",
@@ -884,7 +886,6 @@ static void test_http_client_task(void *arg)
     claw_llm_http_json_request_t request = {
         .url = task->url,
         .body = "{\"input\":\"test\"}",
-        .auth_type = "none",
         .timeout_ms = TEST_HTTP_TIMEOUT_MS,
         .abort_flag = task->abort_flag,
     };
@@ -949,6 +950,7 @@ static claw_core_config_t make_test_core_config(uint32_t instance_id,
     claw_core_config_t config = {
         .instance_id = instance_id,
         .api_key = "test",
+        .base_url = "http://127.0.0.1",
         .backend_type = "core_interrupt_test",
         .model = model,
         .system_prompt = "system",

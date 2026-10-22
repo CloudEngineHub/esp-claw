@@ -143,6 +143,8 @@ typedef struct {
     uint32_t instance_id;
     const char *api_key;
     const char *backend_type;
+    /** NULL or empty selects the built-in static endpoint provider. */
+    const char *endpoint_provider;
     const char *model;
     const char *base_url;
     const char *auth_type;

@@ -133,6 +133,7 @@ static void main_copy_claw_to_app_config(const app_claw_config_t *src, app_confi
 {
     strlcpy(dst->llm_api_key, src->llm_api_key, sizeof(dst->llm_api_key));
     strlcpy(dst->llm_backend_type, src->llm_backend_type, sizeof(dst->llm_backend_type));
+    strlcpy(dst->llm_endpoint_provider, src->llm_endpoint_provider, sizeof(dst->llm_endpoint_provider));
     strlcpy(dst->llm_model, src->llm_model, sizeof(dst->llm_model));
     strlcpy(dst->llm_base_url, src->llm_base_url, sizeof(dst->llm_base_url));
     strlcpy(dst->llm_auth_type, src->llm_auth_type, sizeof(dst->llm_auth_type));

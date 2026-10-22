@@ -27,6 +27,7 @@ typedef struct {
     char ap_behavior[16];
     char llm_api_key[APP_CONFIG_STR_LEN];
     char llm_backend_type[32];
+    char llm_endpoint_provider[32];
     char llm_model[64];
     char llm_base_url[APP_CONFIG_STR_LEN];
     char llm_auth_type[32];

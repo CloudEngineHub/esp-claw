@@ -11,6 +11,7 @@
 typedef struct {
     const char *api_key;
     const char *backend_type;
+    const char *endpoint_provider;
     const char *model;
     const char *base_url;
     const char *auth_type;

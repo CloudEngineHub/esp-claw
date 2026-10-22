@@ -169,6 +169,7 @@ export const en = {
   llmMaxTokensPlaceholder: '8192',
   llmAdvanced: 'LLM Advanced Options',
   llmBackend: 'Backend Type',
+  llmEndpointProvider: 'Connection Provider',
   llmBackendPlaceholder: 'openai_responses / openai_compatible / anthropic_compatible',
   llmBaseUrl: 'Base URL',
   llmBaseUrlPlaceholder: 'https://api.openai.com/v1',

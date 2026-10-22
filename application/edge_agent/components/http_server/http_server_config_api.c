@@ -44,6 +44,7 @@ static const config_field_def_t CONFIG_FIELDS[] = {
 
     CONFIG_FIELD("llm",          llm_api_key),
     CONFIG_FIELD("llm",          llm_backend_type),
+    CONFIG_FIELD("llm",          llm_endpoint_provider),
     CONFIG_FIELD("llm",          llm_model),
     CONFIG_FIELD("llm",          llm_base_url),
     CONFIG_FIELD("llm",          llm_auth_type),

@@ -12,6 +12,7 @@ export type AppConfig = {
   ap_behavior: string;
   llm_api_key: string;
   llm_backend_type: string;
+  llm_endpoint_provider: string;
   llm_model: string;
   llm_base_url: string;
   llm_auth_type: string;
@@ -53,6 +54,7 @@ export const GROUP_FIELDS: Record<ConfigGroup, (keyof AppConfig)[]> = {
   llm: [
     'llm_api_key',
     'llm_backend_type',
+    'llm_endpoint_provider',
     'llm_model',
     'llm_base_url',
     'llm_auth_type',

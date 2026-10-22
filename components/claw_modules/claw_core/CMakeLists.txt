@@ -29,6 +29,8 @@ idf_component_register(
         freertos
         mbedtls
         claw_utils
+        claw_endpoint
+        claw_http
     PRIV_REQUIRES
         claw_event_router
 )

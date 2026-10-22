@@ -430,30 +430,31 @@ esp_err_t claw_memory_async_extract_init(const claw_memory_config_t *config)
     }
     llm = &config->llm;
 
-    if (!llm->api_key || !llm->api_key[0] ||
-        !llm->model || !llm->model[0] ||
-        !llm->backend_type || !llm->backend_type[0]) {
+    const claw_llm_runtime_config_t runtime_config = {
+        .api_key = llm->api_key,
+        .backend_type = llm->backend_type,
+        .endpoint_provider = llm->endpoint_provider,
+        .model = llm->model,
+        .base_url = llm->base_url,
+        .auth_type = llm->auth_type,
+        .max_tokens_field = llm->max_tokens_field,
+        .reasoning_effort = llm->reasoning_effort,
+        .timeout_ms = llm->timeout_ms,
+        .max_tokens = llm->max_tokens,
+        .image_max_bytes = llm->image_max_bytes,
+        .supports_tools = llm->supports_tools,
+        .supports_vision = llm->supports_vision,
+        .image_remote_url_only = llm->image_remote_url_only,
+    };
+
+    if (!llm->model || !llm->model[0] ||
+        !llm->backend_type || !llm->backend_type[0] ||
+        !claw_llm_runtime_endpoint_is_configured(&runtime_config)) {
         ESP_LOGI(TAG, "Async memory extract disabled: LLM config incomplete");
         return ESP_OK;
     }
 
-    err = claw_llm_runtime_init(&s_async_extract.runtime,
-                                &(claw_llm_runtime_config_t) {
-                                    .api_key = llm->api_key,
-                                    .backend_type = llm->backend_type,
-                                    .model = llm->model,
-                                    .base_url = llm->base_url,
-                                    .auth_type = llm->auth_type,
-                                    .max_tokens_field = llm->max_tokens_field,
-                                    .reasoning_effort = llm->reasoning_effort,
-                                    .timeout_ms = llm->timeout_ms,
-                                    .max_tokens = llm->max_tokens,
-                                    .image_max_bytes = llm->image_max_bytes,
-                                    .supports_tools = llm->supports_tools,
-                                    .supports_vision = llm->supports_vision,
-                                    .image_remote_url_only = llm->image_remote_url_only,
-                                },
-                                &error_message);
+    err = claw_llm_runtime_init(&s_async_extract.runtime, &runtime_config, &error_message);
     if (err != ESP_OK) {
         ESP_LOGE(TAG,
                  "Failed to init async memory extract runtime: %s",

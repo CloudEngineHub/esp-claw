@@ -12,6 +12,7 @@
 
 #include "cJSON.h"
 #include "claw_cap.h"
+#include "claw_endpoint.h"
 #include "esp_check.h"
 #include "esp_err.h"
 #include "esp_log.h"
@@ -90,7 +91,7 @@ static const cap_llm_preset_t s_presets[] = {
         .id = "anthropic",
         .backend_type = "anthropic_compatible",
         .base_url = "https://api.anthropic.com/v1",
-        .auth_type = "none",
+        .auth_type = "api-key",
         .model = "claude-3-5-haiku-latest",
         .max_tokens_field = "max_tokens",
         .reasoning_effort = "medium",
@@ -112,6 +113,8 @@ static const char *s_usage =
     "/llm token <api_token>\n"
     "/llm model <model>\n"
     "/llm backend <backend>\n"
+    "/llm endpoint <provider>\n"
+    "/llm auth <bearer|api-key|none>\n"
     "/llm base-url <base_url>\n"
     "/llm reasoning <none|low|medium|high|xhigh|max>\n"
     "/llm reset\n";
@@ -247,6 +250,7 @@ static void mask_token(const char *token, char *out, size_t out_size)
 static void apply_preset(cap_llm_config_t *config, const cap_llm_preset_t *preset)
 {
     strlcpy(config->backend_type, preset->backend_type, sizeof(config->backend_type));
+    strlcpy(config->endpoint_provider, CLAW_ENDPOINT_PROVIDER_STATIC, sizeof(config->endpoint_provider));
     strlcpy(config->base_url, preset->base_url, sizeof(config->base_url));
     strlcpy(config->auth_type, preset->auth_type, sizeof(config->auth_type));
     strlcpy(config->model, preset->model, sizeof(config->model));
@@ -306,12 +310,14 @@ static void write_status(const cap_llm_config_t *config, char *output, size_t ou
              output_size,
              "LLM status\n"
              "backend: %s\n"
+             "endpoint provider: %s\n"
              "base_url: %s\n"
              "model: %s\n"
              "token: %s\n"
              "reasoning: %s\n"
              "tools: %s vision: %s",
              config->backend_type[0] ? config->backend_type : "(missing)",
+             config->endpoint_provider[0] ? config->endpoint_provider : CLAW_ENDPOINT_PROVIDER_STATIC,
              config->base_url[0] ? config->base_url : "(missing)",
              config->model[0] ? config->model : "(missing)",
              masked,
@@ -322,10 +328,13 @@ static void write_status(const cap_llm_config_t *config, char *output, size_t ou
 
 static bool config_ready(const cap_llm_config_t *config)
 {
-    return config->api_key[0] &&
-           config->backend_type[0] &&
-           config->base_url[0] &&
-           config->model[0];
+    return config->backend_type[0] && config->model[0] &&
+           claw_endpoint_is_configured(config->endpoint_provider, &(claw_endpoint_config_t) {
+               .service = CLAW_ENDPOINT_SERVICE_LLM,
+               .base_url = config->base_url,
+               .api_key = config->api_key,
+               .auth_type = config->auth_type,
+           });
 }
 
 static esp_err_t save_config(cap_llm_config_t *config, char *output, size_t output_size)
@@ -419,6 +428,24 @@ static esp_err_t llm_config_execute(const char *input_json,
         goto cleanup;
     }
 
+    if (strcmp(subcommand, "endpoint") == 0 || strcmp(subcommand, "auth") == 0) {
+        bool has_value = false;
+        err = read_token(&cursor, parse_buf->backend, sizeof(parse_buf->backend), &has_value);
+        if (err != ESP_OK) goto cleanup;
+        const bool auth = strcmp(subcommand, "auth") == 0;
+        if (!has_value || (auth && strcmp(parse_buf->backend, CLAW_ENDPOINT_AUTH_BEARER) != 0 &&
+                           strcmp(parse_buf->backend, CLAW_ENDPOINT_AUTH_API_KEY) != 0 &&
+                           strcmp(parse_buf->backend, CLAW_ENDPOINT_AUTH_NONE) != 0)) {
+            strlcpy(output, auth ? "Usage: /llm auth <bearer|api-key|none>"
+                                : "Usage: /llm endpoint <provider>", output_size);
+            goto cleanup;
+        }
+        if (auth) strlcpy(config->auth_type, parse_buf->backend, sizeof(config->auth_type));
+        else strlcpy(config->endpoint_provider, parse_buf->backend, sizeof(config->endpoint_provider));
+        err = save_config(config, output, output_size);
+        goto cleanup;
+    }
+
     if (strcmp(subcommand, "setup") == 0) {
         bool has_provider = false;
         bool has_token = false;
@@ -479,14 +506,14 @@ static esp_err_t llm_config_execute(const char *input_json,
                 goto cleanup;
             }
             strlcpy(config->backend_type, parse_buf->backend, sizeof(config->backend_type));
+            strlcpy(config->endpoint_provider, CLAW_ENDPOINT_PROVIDER_STATIC, sizeof(config->endpoint_provider));
             strlcpy(config->base_url,
                     has_url ? parse_buf->url : parse_buf->base_url,
                     sizeof(config->base_url));
             strlcpy(config->model, parse_buf->custom_model, sizeof(config->model));
             strlcpy(config->api_key, parse_buf->custom_token, sizeof(config->api_key));
-            if (!config->auth_type[0]) {
-                strlcpy(config->auth_type, "bearer", sizeof(config->auth_type));
-            }
+            strlcpy(config->auth_type, strcmp(config->backend_type, "anthropic_compatible") == 0
+                    ? CLAW_ENDPOINT_AUTH_API_KEY : CLAW_ENDPOINT_AUTH_BEARER, sizeof(config->auth_type));
             if (!config->max_tokens_field[0]) {
                 strlcpy(config->max_tokens_field, "max_tokens", sizeof(config->max_tokens_field));
             }
@@ -647,6 +674,7 @@ static esp_err_t llm_config_execute(const char *input_json,
     if (strcmp(subcommand, "reset") == 0) {
         config->api_key[0] = '\0';
         config->backend_type[0] = '\0';
+        config->endpoint_provider[0] = '\0';
         config->model[0] = '\0';
         config->base_url[0] = '\0';
         config->auth_type[0] = '\0';

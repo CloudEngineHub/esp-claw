@@ -5,6 +5,17 @@
  */
 #include "audio_private.h"
 
+/* Only the player that acquired an output may release it. */
+static void audio_player_release_output(audio_player_t *player)
+{
+    xSemaphoreTake(player->lock, portMAX_DELAY);
+    if (player->acquired) {
+        audio_device_release(player->output);
+        player->acquired = false;
+    }
+    xSemaphoreGive(player->lock);
+}
+
 static const char *audio_player_state_name(audio_playback_state_t state)
 {
     switch (state) {
@@ -50,7 +61,7 @@ static void audio_player_event_cb(const audio_playback_status_t *status, void *c
     }
     xSemaphoreGive(player->lock);
     if (release_output) {
-        audio_device_release(player->output);
+        audio_player_release_output(player);
     }
 }
 
@@ -108,7 +119,7 @@ int lua_audio_player_close(lua_State *L)
         player->service = NULL;
     }
     if (player->output) {
-        audio_device_release(player->output);
+        audio_player_release_output(player);
         if (player->output->holders > 0) {
             player->output->holders--;
         }
@@ -146,9 +157,12 @@ int lua_audio_player_play(lua_State *L)
     if (!audio_device_acquire(player->output)) {
         return lua_audio_push_error(L, "audio player: output busy");
     }
+    xSemaphoreTake(player->lock, portMAX_DELAY);
+    player->acquired = true;
+    xSemaphoreGive(player->lock);
     char *uri = audio_uri_from_path(path);
     if (!uri || !uri[0]) {
-        audio_device_release(player->output);
+        audio_player_release_output(player);
         free(uri);
         return lua_audio_push_error(L, "audio player: invalid uri");
     }
@@ -163,12 +177,12 @@ int lua_audio_player_play(lua_State *L)
     free(uri);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Player run failed: %s", esp_err_to_name(err));
-        audio_device_release(player->output);
+        audio_player_release_output(player);
         player->running = false;
         return lua_audio_push_errorf(L, "audio player: play failed (%s)", esp_err_to_name(err));
     }
     if (wait_done) {
-        audio_device_release(player->output);
+        audio_player_release_output(player);
         player->running = false;
     }
     lua_pushboolean(L, 1);
@@ -183,7 +197,7 @@ int lua_audio_player_stop(lua_State *L)
         ESP_LOGE(TAG, "Player stop failed: %s", esp_err_to_name(err));
         return lua_audio_push_errorf(L, "audio player: stop failed (%s)", esp_err_to_name(err));
     }
-    audio_device_release(player->output);
+    audio_player_release_output(player);
     player->running = false;
     lua_pushboolean(L, 1);
     return 1;

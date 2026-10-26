@@ -45,6 +45,16 @@ esp_err_t audio_mixer_open_track(audio_mixer_handle_t mixer, audio_mixer_track_r
 esp_err_t audio_mixer_close_track(audio_mixer_track_handle_t track);
 size_t audio_mixer_track_write(audio_mixer_track_handle_t track, const void *pcm, size_t bytes);
 
+typedef struct {
+    size_t queued_bytes;
+    size_t capacity_bytes;
+    uint64_t consumed_frames;
+    uint64_t missing_frames;
+} audio_mixer_track_status_t;
+
+/* Counters start at first PCM and reset on open/stop; idle after PCM counts as missing. */
+esp_err_t audio_mixer_track_get_status(audio_mixer_track_handle_t track, audio_mixer_track_status_t *status);
+
 esp_err_t audio_mixer_track_flush(audio_mixer_track_handle_t track);
 esp_err_t audio_mixer_track_stop (audio_mixer_track_handle_t track);
 esp_err_t audio_mixer_track_info(audio_mixer_track_handle_t track, uint32_t *sample_rate, uint8_t *channels, uint8_t *bits);

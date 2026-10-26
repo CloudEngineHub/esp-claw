@@ -515,3 +515,18 @@ int lua_audio_output_play_tone(lua_State *L)
     lua_pushboolean(L, 1);
     return 1;
 }
+
+int lua_audio_output_status(lua_State *L)
+{
+    audio_device_t *output = lua_audio_check_device(L, 1, AUDIO_DEVICE_OUTPUT, "status");
+    audio_mixer_track_status_t status;
+    esp_err_t err = audio_mixer_track_get_status(output->sink_handle, &status);
+    if (err != ESP_OK) return lua_audio_push_errorf(L, "audio output: %s", esp_err_to_name(err));
+    lua_newtable(L);
+    lua_pushnumber(L, status.queued_bytes); lua_setfield(L, -2, "queued_bytes");
+    lua_pushnumber(L, status.capacity_bytes); lua_setfield(L, -2, "capacity_bytes");
+    lua_pushnumber(L, 1000.0f * status.queued_bytes / output->fmt.bytes_per_frame / output->fmt.sample_rate); lua_setfield(L, -2, "queued_ms");
+    lua_pushnumber(L, status.consumed_frames); lua_setfield(L, -2, "consumed_frames");
+    lua_pushnumber(L, status.missing_frames); lua_setfield(L, -2, "missing_frames");
+    return 1;
+}

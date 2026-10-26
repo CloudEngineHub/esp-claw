@@ -52,6 +52,9 @@ struct audio_mixer_track {
     SemaphoreHandle_t        io_mtx;
     char                    *owner_tag;
     bool                     open;
+    bool                     streaming;
+    uint64_t                 consumed_frames;
+    uint64_t                 missing_frames;
     struct audio_mixer_t    *parent;
 };
 
@@ -162,6 +165,10 @@ static bool mixer_drain_track(struct audio_mixer_t *m, audio_mixer_track_role_t 
     xSemaphoreTake(t->io_mtx, portMAX_DELAY);
     if (t->open && t->ring != NULL) {
         got = xStreamBufferReceive(t->ring, scratch, frame_bytes, 0);
+        if (t->streaming) {
+            t->consumed_frames += frame_bytes / m->bytes_per_frame;
+            t->missing_frames += (frame_bytes - got) / m->bytes_per_frame;
+        }
     }
     xSemaphoreGive(t->io_mtx);
     if (got < frame_bytes) {
@@ -476,6 +483,9 @@ esp_err_t audio_mixer_open_track(audio_mixer_handle_t mixer, audio_mixer_track_r
     }
     xSemaphoreTake(t->io_mtx, portMAX_DELAY);
     (void)xStreamBufferReset(t->ring);
+    t->streaming = false;
+    t->consumed_frames = 0;
+    t->missing_frames = 0;
     t->open = true;
     xSemaphoreGive(t->io_mtx);
     xSemaphoreGive(mixer->mtx);
@@ -523,6 +533,7 @@ size_t audio_mixer_track_write(audio_mixer_track_handle_t track,
             break;
         }
         total += xStreamBufferSend(track->ring, src + total, bytes - total, 0);
+        if (total > 0) track->streaming = true;
         xSemaphoreGive(track->io_mtx);
         if (total == bytes || pdTICKS_TO_MS(xTaskGetTickCount() - started) >= AUDIO_MIXER_WRITE_TIMEOUT_MS) {
             break;
@@ -565,6 +576,9 @@ esp_err_t audio_mixer_track_stop(audio_mixer_track_handle_t track)
     xSemaphoreTake(track->io_mtx, portMAX_DELAY);
     if (track->ring) {
         (void)xStreamBufferReset(track->ring);
+        track->streaming = false;
+        track->consumed_frames = 0;
+        track->missing_frames = 0;
     }
     xSemaphoreGive(track->io_mtx);
     return ESP_OK;
@@ -579,5 +593,21 @@ esp_err_t audio_mixer_track_info(audio_mixer_track_handle_t track, uint32_t *sam
     if (sample_rate) *sample_rate = cfg->sample_rate;
     if (channels)    *channels    = cfg->channels;
     if (bits)        *bits        = cfg->bits;
+    return ESP_OK;
+}
+
+esp_err_t audio_mixer_track_get_status(audio_mixer_track_handle_t track, audio_mixer_track_status_t *status)
+{
+    if (!track || !track->parent || !status) return ESP_ERR_INVALID_ARG;
+    xSemaphoreTake(track->io_mtx, portMAX_DELAY);
+    if (!track->open || !track->ring) {
+        xSemaphoreGive(track->io_mtx);
+        return ESP_ERR_INVALID_STATE;
+    }
+    status->queued_bytes = xStreamBufferBytesAvailable(track->ring);
+    status->capacity_bytes = status->queued_bytes + xStreamBufferSpacesAvailable(track->ring);
+    status->consumed_frames = track->consumed_frames;
+    status->missing_frames = track->missing_frames;
+    xSemaphoreGive(track->io_mtx);
     return ESP_OK;
 }

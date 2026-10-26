@@ -1,7 +1,7 @@
 # Lua Audio
 
 The `audio` module provides Lua APIs for PCM input and output, media playback,
-recording, and basic audio analysis.
+recording, polyphonic sample playback, and basic audio analysis.
 
 ```lua
 local audio = require("audio")
@@ -13,8 +13,8 @@ local audio = require("audio")
 - Close players before their output device, and close recorders and analyzers
   before their input device. Closing a device that is still in use returns
   `nil, "audio device: busy"`.
-- Operations that fail at runtime return `nil, error_message`. Invalid Lua
-  argument types or values raise a Lua error.
+- Operations that fail at runtime return `nil, error_message`. Invalid arguments
+  may raise a Lua error; validate user-supplied values before calling.
 - `close()` is safe to call more than once and returns `true`.
 
 ## Open devices
@@ -69,8 +69,7 @@ volume.
 
 ### `output:set_mute(mute)`
 
-Accepted for compatibility. It currently has no audible effect and returns
-`true`.
+Returns `true` without changing the audible output. Use `set_volume(0)` to mute.
 
 ### `output:write(pcm)`
 
@@ -82,6 +81,20 @@ Writes a Lua string containing frame-aligned raw PCM in the format returned by
 Plays a sine tone and returns `true`, or `nil, error_message`. Both arguments
 must be positive integers. `freq_hz` must be lower than half the output sample
 rate. This method supports only 16-bit and 32-bit output PCM formats.
+
+### `output:status()`
+
+Returns output buffering and playback statistics:
+
+| Field | Meaning |
+|---|---|
+| `queued_bytes` | Audio bytes waiting to play |
+| `capacity_bytes` | Maximum buffered audio bytes |
+| `queued_ms` | Audio duration waiting to play, in milliseconds |
+| `consumed_frames` | Output frames consumed, including silence inserted when audio is unavailable |
+| `missing_frames` | Output frames for which audio was unavailable |
+
+Counters begin with the first audio submission and reset when a sample player starts or closes. `stop(voice)` and `clear()` do not reset them. When diagnosing interruptions, compare `missing_frames` before and after active playback; an idle output left open after writing can also accumulate missing frames.
 
 ### `output:close()`
 
@@ -152,6 +165,62 @@ Returns:
 ### `player:close()`
 
 Stops and closes the player.
+
+## Sample player
+
+`audio.sample_player` plays overlapping game effects and instrument samples. It accepts **signed 16-bit little-endian mono raw PCM**, with no WAV header. Use `audio.player` for encoded files and streams.
+
+### Example
+
+Place a 16 kHz PCM file at `apps/my_game/assets/click.pcm` under the writable storage root:
+
+```lua
+local audio, storage, delay = require("audio"), require("storage"), require("delay")
+local path = storage.join_path(storage.get_root_dir(), "apps/my_game/assets/click.pcm")
+local output = assert(audio.open_output())
+local player
+local ok, err = pcall(function()
+    player = assert(audio.sample_player({ output = output, source_rate = 16000 }))
+    assert(player:load(1, storage.read_file(path)))
+    assert(player:start())
+    local voice = assert(player:trigger(1, 0.5, 0, 300))
+    delay.delay_ms(400)
+end)
+if player then player:close() end
+output:close()
+assert(ok, err)
+```
+
+### Options
+
+| Option | Default | Range |
+|---|---|---|
+| `output` | Required | Open output object |
+| `source_rate` | `16000` | Integer, 8000–48000 Hz; same for all samples |
+| `max_voices` | `6` | Integer, 1–16 |
+| `sample_budget_bytes` | `2097152` | Integer, 2–4294967295; loaded PCM only |
+| `attack_ms`, `release_ms` | `0` | Integer, 0–1000 ms fade-in/fade-out |
+| `limit_threshold` | `0` | Finite, 0 ≤ value < 1; 0 disables soft limiting |
+
+### Methods
+
+- `load(id, pcm)`: load before `start()`; up to 64 unique sample IDs. Duplicate IDs, empty/odd-sized PCM and loads exceeding the budget are rejected without changing existing samples.
+- `start()`: start once and reserve the output until `close()`. Other players and direct writes cannot use that output meanwhile.
+- `trigger(id, gain=1, delay_ms=0, duration_ms=0, rate=1)`: return a handle for one playback. Gain is finite, 0–1; delay is an integer, 0–1000 ms; duration is an integer, 0–60000 ms (0 plays the natural length); rate is finite, 0.25–4. When all voices are occupied, the oldest is replaced.
+- `stop(voice)`: cancel one active or delayed playback. Ended or replaced handles are harmless; handles from another player are rejected.
+- `clear()`: cancel all playbacks, keeping samples and output ownership.
+- `status()`: return `{ active_voices, loaded_samples, sample_bytes, sample_budget_bytes, render_max_us, rendered_blocks, error }`. Voice counts include delayed sounds and may briefly lag requests. Close the player if `error` is not `"ESP_OK"`.
+- `close()`: stop, release samples and output ownership; safe to repeat.
+
+Methods return `true` or `nil, error_message`, except `trigger()` and `status()`. Invalid arguments may raise errors. Busy playback can reject trigger/stop requests; check their results. Keep the script running while sounds play, and close the player before its output. Handles keep their player reachable; dropping a handle does not stop its sound.
+
+### Pitch and effects
+
+Rate `2` raises pitch one octave and halves natural duration; `0.5` does the reverse. For a known sample pitch, calculate `rate = 2 ^ ((target_midi - sample_midi) / 12)`. Sample IDs do not themselves represent pitches.
+
+Layer effects by triggering multiple loaded samples with different gains, delays and rates. Keep the returned handles to cancel individual sounds. Output latency also applies to triggers and cancellation.
+
+Samples cannot change after `start()`. Looping, duration-preserving pitch shifts, live gain/pitch adjustment, pan and reverb are not supported. A longer `duration_ms` cannot extend a sample beyond its end. The sample budget excludes Lua strings and other playback memory.
 
 ## Recorder
 

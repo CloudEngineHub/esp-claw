@@ -38,6 +38,8 @@
 #define AUDIO_DEVICE_INPUT_META       "lua_audio_input"
 #define AUDIO_DEVICE_OUTPUT_META      "lua_audio_output"
 #define AUDIO_PLAYER_META             "lua_audio_player"
+#define AUDIO_SAMPLE_PLAYER_META      "lua_audio_sample_player"
+#define AUDIO_VOICE_META              "lua_audio_sample_voice"
 #define AUDIO_RECORDER_META           "lua_audio_recorder"
 #define AUDIO_ANALYZER_META           "lua_audio_analyzer"
 #define AUDIO_SPECTRUM_MIN_FFT        64
@@ -96,6 +98,7 @@ typedef struct {
     SemaphoreHandle_t lock;
     bool closed;
     bool running;
+    bool acquired;
     audio_playback_state_t state;
     struct {
         int sample_rate;
@@ -157,6 +160,7 @@ bool audio_path_valid(const char *path, const char *ext);
 
 void audio_converter_destroy(audio_converter_t *converter);
 esp_err_t audio_converter_create(audio_converter_t *converter, const audio_format_t *src, const audio_format_t *dst);
+esp_err_t audio_converter_prepare(audio_converter_t *converter, uint32_t in_bytes);
 esp_err_t audio_converter_process(audio_converter_t *converter, const uint8_t *in, uint32_t in_bytes, uint8_t **out, uint32_t *out_bytes);
 
 int lua_audio_open_output(lua_State *L);
@@ -192,3 +196,13 @@ int lua_audio_analyzer_close(lua_State *L);
 int lua_audio_analyzer_gc(lua_State *L);
 int lua_audio_analyzer_read_level(lua_State *L);
 int lua_audio_analyzer_read_spectrum(lua_State *L);
+
+int lua_audio_sample_player_new(lua_State *L);
+int lua_audio_sample_player_close(lua_State *L);
+int lua_audio_sample_player_load(lua_State *L);
+int lua_audio_sample_player_start(lua_State *L);
+int lua_audio_sample_player_trigger(lua_State *L);
+int lua_audio_sample_player_stop(lua_State *L);
+int lua_audio_sample_player_clear(lua_State *L);
+int lua_audio_sample_player_status(lua_State *L);
+int lua_audio_output_status(lua_State *L);

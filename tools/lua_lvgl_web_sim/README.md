@@ -23,9 +23,9 @@ These APIs return simulated data and do not access physical devices:
   or `i2c.borrow(port)`. Optional `address`, `int_gpio`, and `sdo_gpio` fields
   do not configure hardware.
 - IMU handles provide `read()`, `read_temperature()`, `read_int_status()`,
-  `name()`, and `close()`. Reads return stationary acceleration
-  `{x=0, y=0, z=16384}`, zero gyro, browser elapsed microseconds in `sens_time`,
-  and zero status/temperature. Read and name calls fail after closing.
+  `name()`, and `close()`. Reads return simulated acceleration
+  (16384 LSB/g), zero gyro, browser elapsed microseconds in `sens_time`,
+  and zero status/temperature. The page provides a tilt joystick (mouse, touch and arrow keys; release to center), shake, flip and reset controls. Read and name calls fail after closing.
 - `button.on(handle, event, callback)` accepts a subscription, but no physical
   button events are generated. `button.dispatch()` returns zero, and
   `button.get_key_level(handle)` returns the inactive level.
@@ -33,11 +33,24 @@ These APIs return simulated data and do not access physical devices:
 Hardware mocks do not validate board wiring, detect resource conflicts, or
 model sensor-specific ranges and timing. Validate hardware behavior on a board.
 
+## Audio and bitmap rendering
+
+`audio.open_output`, `audio.player` and `audio.sample_player` use browser audio.
+Click Run to unlock playback. File playback, PCM writes and a started sample player
+exclusively own the output; close players before closing their output.
+Sample playback supports voice handles, rate, delay, duration and envelopes.
+The browser compressor approximates limiting; hardware underrun and timing counters
+are unavailable. Remote streams retain the local proxy at port 8092; use the runtime's
+`?stream=direct` option to bypass it.
+
+`display:blit` supports RGB565, RGB888 and BGR888. `image` remains unsupported.
+
 ## Validation
 
 Upload `tests/display_contract.lua` and check `DISPLAY_CONTRACT_OK`.
 Duplicate screen-open errors are expected. Upload `tests/display_font_contract.lua`
 and check `DISPLAY_FONT_CONTRACT_OK`; truncated-font errors are expected.
+Run `pnpm test` in `pages/simulator` for bootstrap and audio lifecycle checks.
 
 Third-party dependencies are fetched into the CMake build directory:
 

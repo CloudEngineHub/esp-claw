@@ -148,7 +148,7 @@ static void sim_lua_stop_hook(lua_State *L, lua_Debug *ar)
 {
     (void)ar;
     if (sim_stop_requested()) {
-        luaL_error(L, "script stopped");
+        luaL_error(L, "stop requested");
     }
 }
 
@@ -289,274 +289,7 @@ static int luaopen_board_manager(lua_State *L)
     return 1;
 }
 
-static int lua_audio_output_write(lua_State *L)
-{
-    int output_id;
-    size_t len = 0;
-    const char *data;
-    int ok;
-    luaL_checktype(L, 1, LUA_TTABLE);
-    data = luaL_checklstring(L, 2, &len);
-    lua_getfield(L, 1, "__sim_output_id");
-    output_id = (int)luaL_optinteger(L, -1, 0);
-    lua_pop(L, 1);
-    ok = EM_ASM_INT({
-        const err = Module.__simServices.audio.writePcm($0, $1, $2);
-        Module.__simLastString = err || "";
-        return err ? 0 : 1;
-    }, output_id, data, (int)len);
-    if (!ok) {
-        char *err = sim_js_take_last_string();
-        printf("[audio] pcm write skipped: %s\n", err ? err : "audio write failed");
-        free(err);
-        lua_pushboolean(L, 1);
-        return 1;
-    }
-    lua_pushboolean(L, ok);
-    return 1;
-}
-
-static int lua_audio_output_close(lua_State *L)
-{
-    luaL_checktype(L, 1, LUA_TTABLE);
-    lua_pushboolean(L, 1);
-    return 1;
-}
-
-static int lua_audio_output_info(lua_State *L)
-{
-    int sample_rate;
-    int channels;
-    int bits;
-
-    luaL_checktype(L, 1, LUA_TTABLE);
-    lua_getfield(L, 1, "sample_rate");
-    sample_rate = (int)luaL_optinteger(L, -1, 16000);
-    lua_pop(L, 1);
-    lua_getfield(L, 1, "channels");
-    channels = (int)luaL_optinteger(L, -1, 1);
-    lua_pop(L, 1);
-    lua_getfield(L, 1, "bits");
-    bits = (int)luaL_optinteger(L, -1, 16);
-    lua_pop(L, 1);
-
-    lua_newtable(L);
-    lua_pushinteger(L, sample_rate);
-    lua_setfield(L, -2, "sample_rate");
-    lua_pushinteger(L, channels);
-    lua_setfield(L, -2, "channels");
-    lua_pushinteger(L, bits);
-    lua_setfield(L, -2, "bits");
-    return 1;
-}
-
-static int lua_audio_output_set_volume(lua_State *L)
-{
-    int output_id;
-    int volume;
-    luaL_checktype(L, 1, LUA_TTABLE);
-    lua_getfield(L, 1, "__sim_output_id");
-    output_id = (int)luaL_optinteger(L, -1, 0);
-    lua_pop(L, 1);
-    volume = (int)luaL_optinteger(L, 2, 80);
-    lua_pushboolean(L, EM_ASM_INT({
-        return Module.__simServices.audio.setVolume($0, $1) ? 1 : 0;
-    }, output_id, volume));
-    return 1;
-}
-
-static int lua_audio_new_output(lua_State *L)
-{
-    int sample_rate = 16000;
-    int channels = 1;
-    int bits = 16;
-    int volume = 70;
-    int output_id;
-
-    luaL_checktype(L, 1, LUA_TTABLE);
-    lua_rawgeti(L, 1, 2);
-    sample_rate = (int)luaL_optinteger(L, -1, sample_rate);
-    lua_pop(L, 1);
-    lua_rawgeti(L, 1, 3);
-    channels = (int)luaL_optinteger(L, -1, channels);
-    lua_pop(L, 1);
-    lua_rawgeti(L, 1, 4);
-    bits = (int)luaL_optinteger(L, -1, bits);
-    lua_pop(L, 1);
-    lua_getfield(L, 1, "sample_rate");
-    sample_rate = (int)luaL_optinteger(L, -1, sample_rate);
-    lua_pop(L, 1);
-    lua_getfield(L, 1, "rate");
-    sample_rate = (int)luaL_optinteger(L, -1, sample_rate);
-    lua_pop(L, 1);
-    lua_getfield(L, 1, "channels");
-    channels = (int)luaL_optinteger(L, -1, channels);
-    lua_pop(L, 1);
-    lua_getfield(L, 1, "bits");
-    bits = (int)luaL_optinteger(L, -1, bits);
-    lua_pop(L, 1);
-    lua_getfield(L, 1, "volume");
-    volume = (int)luaL_optinteger(L, -1, volume);
-    lua_pop(L, 1);
-
-    output_id = EM_ASM_INT({
-        return Module.__simServices.audio.createOutput({
-            sample_rate: $0,
-            channels: $1,
-            bits: $2,
-            volume: $3,
-        }) | 0;
-    }, sample_rate, channels, bits, volume);
-
-    lua_newtable(L);
-    lua_pushinteger(L, output_id);
-    lua_setfield(L, -2, "__sim_output_id");
-    lua_pushinteger(L, sample_rate);
-    lua_setfield(L, -2, "sample_rate");
-    lua_pushinteger(L, channels);
-    lua_setfield(L, -2, "channels");
-    lua_pushinteger(L, bits);
-    lua_setfield(L, -2, "bits");
-    lua_pushcfunction(L, lua_audio_output_write);
-    lua_setfield(L, -2, "write");
-    lua_pushcfunction(L, lua_audio_output_close);
-    lua_setfield(L, -2, "close");
-    lua_pushcfunction(L, lua_audio_output_info);
-    lua_setfield(L, -2, "info");
-    lua_pushcfunction(L, lua_audio_output_set_volume);
-    lua_setfield(L, -2, "set_volume");
-    return 1;
-}
-
-static int lua_audio_player_play(lua_State *L)
-{
-    int player_id;
-    luaL_checktype(L, 1, LUA_TTABLE);
-    const char *url = luaL_optstring(L, 2, "");
-    lua_getfield(L, 1, "__sim_player_id");
-    player_id = (int)luaL_optinteger(L, -1, 0);
-    lua_pop(L, 1);
-    int ok = EM_ASM_INT({
-        const err = Module.__simServices.audio.play($0, UTF8ToString($1));
-        Module.__simLastString = err || "";
-        return err ? 0 : 1;
-    }, player_id, url);
-    lua_pushboolean(L, ok);
-    if (!ok) {
-        char *err = sim_js_take_last_string();
-        lua_pushstring(L, err ? err : "audio play failed");
-        free(err);
-        return 2;
-    }
-    return 1;
-}
-
-static int lua_audio_player_stop(lua_State *L)
-{
-    int player_id;
-    luaL_checktype(L, 1, LUA_TTABLE);
-    lua_getfield(L, 1, "__sim_player_id");
-    player_id = (int)luaL_optinteger(L, -1, 0);
-    lua_pop(L, 1);
-    lua_pushboolean(L, EM_ASM_INT({
-        return Module.__simServices.audio.stop($0) ? 1 : 0;
-    }, player_id));
-    return 1;
-}
-
-static int lua_audio_player_close(lua_State *L)
-{
-    int player_id;
-    luaL_checktype(L, 1, LUA_TTABLE);
-    lua_getfield(L, 1, "__sim_player_id");
-    player_id = (int)luaL_optinteger(L, -1, 0);
-    lua_pop(L, 1);
-    lua_pushboolean(L, EM_ASM_INT({
-        return Module.__simServices.audio.closePlayer($0) ? 1 : 0;
-    }, player_id));
-    return 1;
-}
-
-static int lua_audio_player_poll(lua_State *L)
-{
-    int player_id;
-    char *state;
-    char *err;
-    luaL_checktype(L, 1, LUA_TTABLE);
-    lua_getfield(L, 1, "__sim_player_id");
-    player_id = (int)luaL_optinteger(L, -1, 0);
-    lua_pop(L, 1);
-    EM_ASM({
-        const info = Module.__simServices.audio.poll($0);
-        Module.__simAudioPollState = info.state || "stopped";
-        Module.__simAudioPollError = info.error || "";
-    }, player_id);
-    state = (char *)EM_ASM_PTR({
-        const text = Module.__simAudioPollState || "stopped";
-        const len = lengthBytesUTF8(text) + 1;
-        const ptr = _malloc(len);
-        stringToUTF8(text, ptr, len);
-        return ptr;
-    });
-    err = (char *)EM_ASM_PTR({
-        const text = Module.__simAudioPollError || "";
-        const len = lengthBytesUTF8(text) + 1;
-        const ptr = _malloc(len);
-        stringToUTF8(text, ptr, len);
-        return ptr;
-    });
-    lua_newtable(L);
-    lua_pushstring(L, state ? state : "stopped");
-    lua_setfield(L, -2, "state");
-    if (err && err[0]) {
-        lua_pushstring(L, err);
-        lua_setfield(L, -2, "error");
-    }
-    free(state);
-    free(err);
-    return 1;
-}
-
-static int lua_audio_player(lua_State *L)
-{
-    int output_id = 0;
-    int player_id;
-    luaL_checktype(L, 1, LUA_TTABLE);
-    lua_getfield(L, 1, "output");
-    if (lua_istable(L, -1)) {
-        lua_getfield(L, -1, "__sim_output_id");
-        output_id = (int)luaL_optinteger(L, -1, 0);
-        lua_pop(L, 1);
-    }
-    lua_pop(L, 1);
-    player_id = EM_ASM_INT({
-        return Module.__simServices.audio.createPlayer($0) | 0;
-    }, output_id);
-    lua_newtable(L);
-    lua_pushinteger(L, player_id);
-    lua_setfield(L, -2, "__sim_player_id");
-    lua_pushcfunction(L, lua_audio_player_play);
-    lua_setfield(L, -2, "play");
-    lua_pushcfunction(L, lua_audio_player_stop);
-    lua_setfield(L, -2, "stop");
-    lua_pushcfunction(L, lua_audio_player_close);
-    lua_setfield(L, -2, "close");
-    lua_pushcfunction(L, lua_audio_player_poll);
-    lua_setfield(L, -2, "poll");
-    return 1;
-}
-
-static int luaopen_audio(lua_State *L)
-{
-    static const luaL_Reg funcs[] = {
-        {"new_output", lua_audio_new_output},
-        {"player", lua_audio_player},
-        {NULL, NULL},
-    };
-    lua_newtable(L);
-    luaL_setfuncs(L, funcs, 0);
-    return 1;
-}
+int luaopen_audio(lua_State *L);
 
 static int lua_delay_ms(lua_State *L)
 {
@@ -568,14 +301,14 @@ static int lua_delay_ms(lua_State *L)
             step = 20;
         }
         if (sim_stop_requested()) {
-            return luaL_error(L, "script stopped");
+            return luaL_error(L, "stop requested");
         }
         sim_esp_compat_pump_once();
         emscripten_sleep((unsigned int)step);
         elapsed += step;
     }
     if (sim_stop_requested()) {
-        return luaL_error(L, "script stopped");
+        return luaL_error(L, "stop requested");
     }
     sim_esp_compat_pump_once();
     return 0;
@@ -597,11 +330,45 @@ static int lua_storage_get_root_dir(lua_State *L)
 
 static int lua_storage_join_path(lua_State *L)
 {
-    const char *a = luaL_checkstring(L, 1);
-    const char *b = luaL_checkstring(L, 2);
-    char out[512];
-    snprintf(out, sizeof(out), "%s%s%s", a, (a[strlen(a) - 1] == '/') ? "" : "/", b);
-    lua_pushstring(L, out);
+    int argc = lua_gettop(L);
+    luaL_Buffer buf;
+    bool wrote = false;
+    bool ends_with_slash = false;
+
+    luaL_buffinit(L, &buf);
+
+    for (int i = 1; i <= argc; i++) {
+        size_t len = 0;
+        size_t start = 0;
+        size_t end = 0;
+        const char *part = luaL_checklstring(L, i, &len);
+
+        if (len == 0) {
+            continue;
+        }
+
+        end = len;
+        if (wrote) {
+            while (start < end && part[start] == '/') {
+                start++;
+            }
+        }
+        while (end > start + 1 && part[end - 1] == '/') {
+            end--;
+        }
+        if (end <= start) {
+            continue;
+        }
+
+        if (wrote && !ends_with_slash) {
+            luaL_addchar(&buf, '/');
+        }
+        luaL_addlstring(&buf, part + start, end - start);
+        wrote = true;
+        ends_with_slash = part[end - 1] == '/';
+    }
+
+    luaL_pushresult(&buf);
     return 1;
 }
 
@@ -952,16 +719,25 @@ static int lua_imu_read(lua_State *L)
 {
     lua_imu_check_open(L);
     lua_newtable(L);
-    /* Stationary raw sample at 16384 LSB/g; no physical sensor is accessed. */
+    /* UI controls supply a gravity vector; shaking is a short transient. */
+    double accel[3];
+    for (int axis = 0; axis < 3; axis++) {
+        accel[axis] = EM_ASM_DOUBLE({
+            const m = Module.__motion || ({x:0, y:0, z:1});
+            let value = ([m.x, m.y, m.z])[$0];
+            const remaining = (m.shakeUntil || 0) - performance.now();
+            if (remaining > 0 && $0 === 0) value += 2 * Math.sin(performance.now() / 22) * Math.min(1, remaining / 150);
+            return value * 16384;
+        }, axis);
+    }
     const char *axes[] = {"accel", "gyro"};
-    for (int i = 0; i < 2; ++i) {
+    const char *names[] = {"x", "y", "z"};
+    for (int i = 0; i < 2; i++) {
         lua_newtable(L);
-        lua_pushinteger(L, 0);
-        lua_setfield(L, -2, "x");
-        lua_pushinteger(L, 0);
-        lua_setfield(L, -2, "y");
-        lua_pushinteger(L, i == 0 ? 16384 : 0);
-        lua_setfield(L, -2, "z");
+        for (int axis = 0; axis < 3; axis++) {
+            lua_pushinteger(L, i == 0 ? (lua_Integer)accel[axis] : 0);
+            lua_setfield(L, -2, names[axis]);
+        }
         lua_setfield(L, -2, axes[i]);
     }
     lua_pushinteger(L, (lua_Integer)(emscripten_get_now() * 1000));
@@ -1242,8 +1018,10 @@ static int luaopen_camera(lua_State *L)
     return 1;
 }
 
-static void json_encode_value(lua_State *L, int index, luaL_Buffer *b)
+static void json_encode_value(lua_State *L, int index, luaL_Buffer *b, int depth)
 {
+    if (depth > 32) luaL_error(L, "json: nesting too deep");
+    luaL_checkstack(L, 4, "json nesting");
     int type;
     index = lua_absindex(L, index);
     type = lua_type(L, index);
@@ -1253,6 +1031,7 @@ static void json_encode_value(lua_State *L, int index, luaL_Buffer *b)
         break;
     case LUA_TNUMBER:
     {
+        if (!isfinite(lua_tonumber(L, index))) luaL_error(L, "json: non-finite number");
         char number[64];
         snprintf(number, sizeof(number), "%.14g", lua_tonumber(L, index));
         luaL_addstring(b, number);
@@ -1266,28 +1045,47 @@ static void json_encode_value(lua_State *L, int index, luaL_Buffer *b)
             if (s[i] == '"' || s[i] == '\\') {
                 luaL_addchar(b, '\\');
             }
-            luaL_addchar(b, s[i]);
+            if ((unsigned char)s[i] < 32) {
+                char escaped[7];
+                snprintf(escaped, sizeof(escaped), "\\u%04x", (unsigned char)s[i]);
+                luaL_addstring(b, escaped);
+            } else luaL_addchar(b, s[i]);
         }
         luaL_addchar(b, '"');
         break;
     }
     case LUA_TTABLE: {
-        bool first = true;
-        luaL_addchar(b, '{');
+        size_t length = lua_rawlen(L, index), count = 0;
+        bool array = length > 0;
         lua_pushnil(L);
-        while (lua_next(L, index) != 0) {
-            if (!first) {
-                luaL_addchar(b, ',');
-            }
-            first = false;
-            lua_pushvalue(L, -2);
-            json_encode_value(L, -1, b);
-            lua_pop(L, 1);
-            luaL_addchar(b, ':');
-            json_encode_value(L, -1, b);
+        while (lua_next(L, index)) {
+            if (!lua_isinteger(L, -2) || lua_tointeger(L, -2) < 1 || (size_t)lua_tointeger(L, -2) > length) array = false;
+            count++;
             lua_pop(L, 1);
         }
-        luaL_addchar(b, '}');
+        array = array && count == length;
+        luaL_addchar(b, array ? '[' : '{');
+        if (array) {
+            for (size_t i = 1; i <= length; i++) {
+                if (i > 1) luaL_addchar(b, ',');
+                lua_rawgeti(L, index, i);
+                json_encode_value(L, -1, b, depth + 1);
+                lua_pop(L, 1);
+            }
+        } else {
+            bool first = true;
+            lua_pushnil(L);
+            while (lua_next(L, index)) {
+                if (lua_type(L, -2) != LUA_TSTRING) luaL_error(L, "json: object keys must be strings");
+                if (!first) luaL_addchar(b, ',');
+                first = false;
+                json_encode_value(L, -2, b, depth + 1);
+                luaL_addchar(b, ':');
+                json_encode_value(L, -1, b, depth + 1);
+                lua_pop(L, 1);
+            }
+        }
+        luaL_addchar(b, array ? ']' : '}');
         break;
     }
     case LUA_TNIL:
@@ -1301,12 +1099,7 @@ static int lua_json_encode(lua_State *L)
 {
     luaL_Buffer b;
     luaL_buffinit(L, &b);
-    if (lua_isnumber(L, 1)) {
-        lua_pushvalue(L, 1);
-        luaL_addvalue(&b);
-    } else {
-        json_encode_value(L, 1, &b);
-    }
+    json_encode_value(L, 1, &b, 0);
     luaL_pushresult(&b);
     return 1;
 }
@@ -1323,6 +1116,18 @@ static void json_skip_ws(sim_json_parser_t *parser)
 }
 
 static int json_parse_value(lua_State *L, sim_json_parser_t *parser);
+
+static unsigned json_hex4(lua_State *L, const char **text)
+{
+    unsigned value = 0;
+    for (int i = 0; i < 4; i++) {
+        unsigned char c = **text;
+        if (!isxdigit(c)) luaL_error(L, "json: invalid unicode escape");
+        value = value * 16 + (c <= '9' ? c - '0' : (c | 32) - 'a' + 10);
+        (*text)++;
+    }
+    return value;
+}
 
 static int json_parse_string(lua_State *L, sim_json_parser_t *parser)
 {
@@ -1344,13 +1149,27 @@ static int json_parse_string(lua_State *L, sim_json_parser_t *parser)
             case 'n': luaL_addchar(&b, '\n'); break;
             case 'r': luaL_addchar(&b, '\r'); break;
             case 't': luaL_addchar(&b, '\t'); break;
-            case 'u':
-                parser->p += 4;
-                luaL_addchar(&b, '?');
-                break;
+            case 'u': {
+                parser->p++;
+                unsigned cp = json_hex4(L, &parser->p);
+                if (cp >= 0xd800 && cp <= 0xdbff) {
+                    if (parser->p[0] != '\\' || parser->p[1] != 'u') return luaL_error(L, "json: missing low surrogate");
+                    parser->p += 2;
+                    unsigned low = json_hex4(L, &parser->p);
+                    if (low < 0xdc00 || low > 0xdfff) return luaL_error(L, "json: invalid low surrogate");
+                    cp = 0x10000 + ((cp - 0xd800) << 10) + low - 0xdc00;
+                } else if (cp >= 0xdc00 && cp <= 0xdfff) return luaL_error(L, "json: unexpected low surrogate");
+                if (cp < 0x80) luaL_addchar(&b, cp);
+                else {
+                    if (cp >= 0x10000) luaL_addchar(&b, 0xf0 | (cp >> 18));
+                    if (cp >= 0x800) luaL_addchar(&b, (cp < 0x10000 ? 0xe0 : 0x80) | ((cp >> 12) & 0x3f));
+                    luaL_addchar(&b, (cp < 0x800 ? 0xc0 : 0x80) | ((cp >> 6) & 0x3f));
+                    luaL_addchar(&b, 0x80 | (cp & 0x3f));
+                }
+                continue;
+            }
             default:
-                luaL_addchar(&b, *parser->p);
-                break;
+                return luaL_error(L, "json: invalid escape");
             }
         } else {
             luaL_addchar(&b, *parser->p);
@@ -2067,6 +1886,8 @@ int esp_claw_sim_run_file(const char *path)
     if (rc == LUA_OK) {
         rc = lua_pcall(s_lua, 0, 0, 0);
     }
+    const char *error = rc != LUA_OK ? lua_tostring(s_lua, -1) : NULL;
+    if (error && sim_stop_requested() && strstr(error, "stop requested")) rc = LUA_OK;
     if (rc != LUA_OK) {
         printf("Lua error: %s\n", lua_tostring(s_lua, -1));
         lua_pop(s_lua, 1);

@@ -106,6 +106,10 @@ export class RuntimeHost {
     this.iframe.contentWindow?.postMessage({ type: 'esp-claw-sim:setResolution', width, height }, '*')
   }
 
+  setMotion(x: number, y: number, action?: string): void {
+    this.iframe.contentWindow?.postMessage({ type: 'esp-claw-sim:motion', x, y, action }, '*')
+  }
+
   private postMountAndRun(app: LoadedApp): void {
     const files = app.files.map((file) => ({
       path: `${app.virtualRoot}/${file.path}`,

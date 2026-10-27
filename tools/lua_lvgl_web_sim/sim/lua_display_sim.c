@@ -9,6 +9,7 @@
 #include <string.h>
 #include "display_core.h"
 #include "display_text.h"
+#include "display_bitmap.h"
 #include "esp_log.h"
 #include "lauxlib.h"
 
@@ -444,6 +445,32 @@ static int lua_display_text(lua_State *L)
     return err == ESP_OK ? 0 : lua_display_error(L, "text", err);
 }
 
+static int lua_display_blit(lua_State *L)
+{
+    int x = lua_display_integer(L, 2, "x"), y = lua_display_integer(L, 3, "y");
+    size_t bytes;
+    luaL_checktype(L, 4, LUA_TSTRING);
+    const uint8_t *pixels = (const uint8_t *)luaL_checklstring(L, 4, &bytes);
+    luaL_checktype(L, 5, LUA_TTABLE);
+    int width = lua_display_field_integer(L, 5, "width", 0), height = lua_display_field_integer(L, 5, "height", 0);
+    lua_display_raw_field(L, 5, "format");
+    const char *format = luaL_checkstring(L, -1);
+    display_bitmap_format_t bitmap_format = DISPLAY_BITMAP_RGB565;
+    if (strcmp(format, "rgb565") == 0) bitmap_format = DISPLAY_BITMAP_RGB565;
+    else if (strcmp(format, "rgb888") == 0) bitmap_format = DISPLAY_BITMAP_RGB888;
+    else if (strcmp(format, "bgr888") == 0) bitmap_format = DISPLAY_BITMAP_BGR888;
+    else luaL_error(L, "display blit format is invalid");
+    lua_pop(L, 1);
+    if (width <= 0 || height <= 0) luaL_error(L, "display blit requires positive width and height");
+    size_t bpp = bitmap_format == DISPLAY_BITMAP_RGB565 ? 2 : 3;
+    if ((size_t)width > SIZE_MAX / (size_t)height || (size_t)width * (size_t)height > SIZE_MAX / bpp ||
+        bytes != (size_t)width * (size_t)height * bpp) luaL_error(L, "display blit byte length does not match dimensions");
+    display_bitmap_view_t view = {.pixels = pixels, .length = bytes, .width = width, .height = height, .format = bitmap_format};
+    display_bitmap_options_t options = {.opacity = 255};
+    esp_err_t err = display_bitmap_draw(lua_display_draw(L), x, y, &view, &options);
+    return err == ESP_OK ? 0 : lua_display_error(L, "blit", err);
+}
+
 static int lua_display_unsupported(lua_State *L)
 {
     return luaL_error(L, "display images are not supported in the simulator");
@@ -456,7 +483,7 @@ static const luaL_Reg s_screen_methods[] = {
     {"fill_rect", lua_display_fill_rect}, {"stroke_rect", lua_display_stroke_rect}, {"line", lua_display_line},
     {"fill_circle", lua_display_fill_circle}, {"stroke_circle", lua_display_stroke_circle}, {"arc", lua_display_arc},
     {"fill_round_rect", lua_display_fill_round_rect}, {"stroke_round_rect", lua_display_stroke_round_rect},
-    {"fill_triangle", lua_display_fill_triangle}, {"touch", lua_display_touch}, {"image", lua_display_unsupported}, {"blit", lua_display_unsupported},
+    {"fill_triangle", lua_display_fill_triangle}, {"touch", lua_display_touch}, {"image", lua_display_unsupported}, {"blit", lua_display_blit},
     {"text", lua_display_text}, {"measure_text", lua_display_measure_text},
     {NULL, NULL},
 };

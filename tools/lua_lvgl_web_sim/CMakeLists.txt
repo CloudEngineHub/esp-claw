@@ -65,11 +65,13 @@ set(ESP_CLAW_SIM_SOURCES
     sim/esp_claw_sim.c
     sim/sim_esp_compat.c
     sim/lua_display_sim.c
+    sim/lua_audio_sim.c
     ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_display/src/display_color.c
     ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_display/src/display_dirty.c
     ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_display/src/display_core.c
     ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_display/src/display_raster.c
     ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_display/src/display_text.c
+    ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_display/src/display_bitmap.c
     ${ESP_CLAW_ROOT}/components/common/esp_painter/font/basic_font_24.c
     ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_lvgl/src/lua_module_lvgl.c
     ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_lvgl/src/lua_lvgl_core_widgets.c
@@ -91,13 +93,18 @@ set(ESP_CLAW_SIM_SOURCES
     ${LUA_SOURCES}
 )
 
+# Embed the audio service in both normal and single-file shells.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/sim/audio.js")
+file(READ "${PROJECT_SOURCE_DIR}/sim/audio.js" SIM_AUDIO_JS)
+configure_file(esp_claw_shell.html esp_claw_shell.html @ONLY)
+
 # Keep SDL as a final-link option. Putting USE_SDL in global compile flags makes every parallel emcc compile try to initialize the same Emscripten port cache.
-set(ESP_CLAW_SIM_COMMON_LINK_FLAGS "-O3 --shell-file ${PROJECT_SOURCE_DIR}/esp_claw_shell.html -s USE_SDL=2 -s ASYNCIFY=1 -s ASYNCIFY_STACK_SIZE=262144 -s EXPORTED_RUNTIME_METHODS=['ccall','FS']")
-set(ESP_CLAW_SIM_RUNTIME_ASSETS "--preload-file ${PROJECT_SOURCE_DIR}/sim_assets/fonts@/fonts")
-set(ESP_CLAW_SIM_EMBED_ASSETS "--embed-file ${PROJECT_SOURCE_DIR}/sim_assets/fonts@/fonts")
+set(ESP_CLAW_SIM_COMMON_LINK_FLAGS "-O3 --shell-file ${CMAKE_CURRENT_BINARY_DIR}/esp_claw_shell.html -s USE_SDL=2 -s ASYNCIFY=1 -s ASYNCIFY_STACK_SIZE=262144 -s EXPORTED_RUNTIME_METHODS=['ccall','FS']")
+set(ESP_CLAW_SIM_RUNTIME_ASSETS "--preload-file ${PROJECT_SOURCE_DIR}/sim_assets/fonts@/fonts --preload-file ${PROJECT_SOURCE_DIR}/sim_assets/audio.lua@/sim/audio.lua")
+set(ESP_CLAW_SIM_EMBED_ASSETS "--embed-file ${PROJECT_SOURCE_DIR}/sim_assets/fonts@/fonts --embed-file ${PROJECT_SOURCE_DIR}/sim_assets/audio.lua@/sim/audio.lua")
 
 function(configure_esp_claw_sim_target target_name)
-set_property(TARGET ${target_name} APPEND PROPERTY LINK_DEPENDS "${PROJECT_SOURCE_DIR}/esp_claw_shell.html")
+set_property(TARGET ${target_name} APPEND PROPERTY LINK_DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/esp_claw_shell.html" "${PROJECT_SOURCE_DIR}/sim_assets/audio.lua")
 target_include_directories(${target_name} PRIVATE
     ${LUA_SRC_DIR}
     ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_display/src

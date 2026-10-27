@@ -124,7 +124,7 @@ function renderShell(): HTMLIFrameElement {
       <main class="workspace">
         <section class="preview" aria-label="Simulator display">
           <div class="device-shell">
-            <iframe id="runtime" title="ESP-Claw Lua LVGL runtime" allow="camera"></iframe>
+            <iframe id="runtime" title="ESP-Claw Lua LVGL runtime" allow="camera; autoplay"></iframe>
             <div id="previewLoading" class="preview-loading" role="status" aria-label="Loading runtime">
               <span>Loading</span>
               <span class="loading-dots" aria-hidden="true">
@@ -172,6 +172,19 @@ function renderShell(): HTMLIFrameElement {
                 <input id="displayHeight" type="number" min="64" max="2048" step="1" value="480" />
               </label>
               <button id="applyResolution" class="btn-secondary" type="button" disabled>Apply</button>
+            </div>
+          </section>
+
+          <section id="motionControls" class="panel-section" hidden>
+            <div class="section-title">Motion · 倾斜控制</div>
+            <div id="motionStick" class="motion-stick" tabindex="0" role="group" aria-label="倾斜摇杆" aria-describedby="motionHint">
+              <span class="motion-knob"></span>
+            </div>
+            <p id="motionHint" class="motion-hint">拖动倾斜 · 松手回中 · 支持方向键</p>
+            <div class="motion-actions">
+              <button id="motionShake" class="btn-secondary" type="button">Shake · 摇动</button>
+              <button id="motionFlip" class="btn-secondary" type="button">Flip · 翻转</button>
+              <button id="motionReset" class="btn-secondary" type="button">Reset · 归零</button>
             </div>
           </section>
 
@@ -413,6 +426,7 @@ function renderLocalPrompt(): void {
   document.querySelector<HTMLElement>('#fileCount')!.textContent = '0'
   document.querySelector<HTMLElement>('#sourceName')!.textContent = 'local'
   document.querySelector<HTMLAnchorElement>('#sourceLink')!.classList.add('is-hidden')
+  document.querySelector<HTMLElement>('#motionControls')!.hidden = true
   const tagList = document.querySelector<HTMLDivElement>('#categoryTags')!
   tagList.innerHTML = '<span class="tag">local</span><span class="tag">ui</span>'
 }
@@ -434,6 +448,7 @@ function renderApp(loaded: LoadedApp): void {
   }
   document.querySelector<HTMLElement>('#sourceName')!.textContent = loaded.params.repo
 
+  document.querySelector<HTMLElement>('#motionControls')!.hidden = !loaded.peripherals.includes('imu')
   const tagList = document.querySelector<HTMLDivElement>('#categoryTags')!
   tagList.innerHTML = loaded.peripherals.map((item) => `<span class="tag">${escapeHtml(item)}</span>`).join('')
 }
@@ -448,6 +463,66 @@ function runLoadedApp(): void {
 
 async function main(): Promise<void> {
   const iframe = renderShell()
+  const motion = document.querySelector<HTMLElement>('#motionControls')!
+  const motionAnchor = motion.nextElementSibling!
+  const narrow = window.matchMedia('(max-width: 980px)')
+  const placeMotion = () => {
+    if (narrow.matches) document.querySelector('.preview')!.append(motion)
+    else motionAnchor.before(motion)
+  }
+  narrow.addEventListener('change', placeMotion)
+  placeMotion()
+  const stick = document.querySelector<HTMLElement>('#motionStick')!
+  const knob = stick.querySelector<HTMLElement>('.motion-knob')!
+  let pointer: number | null = null
+  const keys = new Set<string>()
+  const tilt = (x: number, y: number, action?: string) => {
+    const length = Math.max(1, Math.hypot(x, y))
+    x /= length; y /= length
+    knob.style.transform = `translate(${x * 54}px, ${y * 54}px)`
+    runtime?.setMotion(x, y, action)
+  }
+  const reset = () => {
+    const captured = pointer
+    pointer = null
+    keys.clear()
+    if (captured !== null && stick.hasPointerCapture(captured)) stick.releasePointerCapture(captured)
+    tilt(0, 0)
+  }
+  const move = (event: PointerEvent) => {
+    if (event.pointerId !== pointer) return
+    const box = stick.getBoundingClientRect()
+    tilt((event.clientX - box.left - box.width / 2) / 54, (event.clientY - box.top - box.height / 2) / 54)
+  }
+  stick.addEventListener('pointerdown', (event) => {
+    if (pointer !== null || event.button !== 0) return
+    event.preventDefault()
+    stick.focus({preventScroll: true})
+    keys.clear()
+    pointer = event.pointerId
+    stick.setPointerCapture(pointer)
+    move(event)
+  })
+  stick.addEventListener('pointermove', move)
+  for (const name of ['pointerup', 'pointercancel', 'lostpointercapture'] as const) {
+    stick.addEventListener(name, (event) => { if (event.pointerId === pointer) reset() })
+  }
+  // Clear held input when focus or pointer capture is lost.
+  stick.addEventListener('blur', reset)
+  window.addEventListener('blur', reset)
+  document.addEventListener('visibilitychange', () => { if (document.hidden) reset() })
+  for (const name of ['keydown', 'keyup'] as const) {
+    stick.addEventListener(name, (event) => {
+      if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return
+      event.preventDefault()
+      if (pointer !== null) return
+      if (name === 'keydown') keys.add(event.key); else keys.delete(event.key)
+      tilt(Number(keys.has('ArrowRight')) - Number(keys.has('ArrowLeft')), Number(keys.has('ArrowDown')) - Number(keys.has('ArrowUp')))
+    })
+  }
+  document.querySelector('#motionShake')!.addEventListener('click', () => { reset(); tilt(0, 0, 'shake') })
+  document.querySelector('#motionFlip')!.addEventListener('click', () => { keys.clear(); tilt(0, 0, 'flip') })
+  document.querySelector('#motionReset')!.addEventListener('click', reset)
   runtime = new RuntimeHost(iframe, {
     onLog: (message, kind) => appendLog(message, kind),
     onState: (state, detail) => {

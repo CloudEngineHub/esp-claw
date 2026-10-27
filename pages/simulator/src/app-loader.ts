@@ -11,6 +11,7 @@ const MODULE_PERIPHERALS: Record<string, string> = {
   display: 'display',
   gpio: 'gpio',
   ir: 'ir',
+  imu: 'imu',
   lcd: 'display',
   led_strip: 'ws2812',
   lvgl: 'display',
